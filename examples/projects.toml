@@ -1,0 +1,22 @@
+# Set local to the absolute path of examples/demo in YOUR checkout before use.
+# Remote paths are placeholders; deploy the same compute.py before planning there.
+[projects.demo]
+name = "Standard-library CPU example"
+description = "Write a deterministic sum and parameters to a run-specific output directory"
+script = "compute.py"
+entrypoint = "{python} {script} --steps {steps} --seed {seed} --out {output_dir}"
+outputs = "outputs"
+output_contract = "argument"
+env_id = "system-py"
+paths = { "local" = "/path/to/checkout/examples/demo", "cluster" = "/home/researcher/projects/demo", "workstation" = "/home/researcher/projects/demo", "windows-wsl" = "/mnt/c/projects/demo" }
+# No fake Git remote: use your own reviewed repository only when configuring sync.
+# inputs = ["configs/*.json"]  # Enable only when these files actually exist.
+
+# Optional storage policy. Never treat a configured root as deletion ownership.
+# disposable_globs = ["scratch/*.tmp"]
+# storage_budget_bytes = 1073741824
+# storage_keep_recent_runs = 5
+# Preview with `rcf storage plan demo --node cluster --kind disposable --run RUN_ID`.
+# Review the concrete file list before `rcf storage apply PLAN_ID --yes`.
+# For long workloads add a progress contract and instrument the entrypoint first;
+# this short example intentionally supplies no ETA/calibration evidence.

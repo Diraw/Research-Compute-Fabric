@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-tests-and-release:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ['3.11', '3.12']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.9.26'
+          enable-cache: true
+      - name: Install locked runtime and test dependencies
+        run: uv sync --frozen --python ${{ matrix.python }}
+      # Warm only the build backend before the strictly offline acceptance step.
+      # This does not modify pyproject.toml or uv.lock.
+      - name: Prepare build backend
+        run: uv pip install --python .venv hatchling
+      - name: Unit and simulated-host tests (never real integrations)
+        run: uv run --frozen --offline pytest -m "not integration"
+      - name: Ruff
+        run: uv run --frozen --offline ruff check --no-respect-gitignore src tests tools
+      - name: Publication privacy checks (current public tree only)
+        run: uv run --frozen --offline python tools/publication_check.py --source . --include-code --json
+      - name: Build and verify delivered artifacts offline outside checkout
+        run: uv run --frozen --offline python tools/release_check.py --source . --output .tmp/ci-release
+      - name: Retain artifacts and acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.os }}-py${{ matrix.python }}
+          path: |
+            .tmp/ci-release/artifacts/*
+            .tmp/ci-release/evidence.json
+          if-no-files-found: warn

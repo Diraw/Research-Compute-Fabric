@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# RCF runtime state; root anchored so src/rcf/runs remains publishable.
+/.rcf/
+/state/
+/runs/
+*.db
+*.db-wal
+*.db-shm
+
+# Private working notes, local configuration and release scratch (keep on disk).
+/.context/
+/private/
+/rcf.toml
+/nodes.toml
+/projects.toml
+/environments.toml
+/.env
+/.env.*
+/.tmp/
+/.tmprelease*/
+/release-scratch*/
+/dist/
+/build/

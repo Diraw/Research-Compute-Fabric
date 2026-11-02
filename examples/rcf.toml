@@ -1,0 +1,62 @@
+# RCF 全局设置（复制到 ~/.rcf/rcf.toml）
+#
+# 这些值都有默认，本文件只是为了把安全姿态写明白。
+
+[security]
+# 允许提交/取消任务（仍需 --yes / confirm=true 二次确认）
+allow_execute = true
+
+# 旧兼容字段，不是环境写入的实际授权边界。
+# 环境变更由下方 managed_roots、既有前缀归属与显式确认共同约束。
+allow_environment_mutation = false
+
+# 系统级操作（安装服务、改系统配置）。RCF 没有实现任何系统级写入，
+# 这个开关保留为显式的「永不允许」。
+allow_system_admin = false
+
+# 所有有副作用的操作都要求显式确认
+require_confirmation = true
+
+[database]
+path = "state/rcf.db"
+
+[environments]
+# 默认为空：不授权任何环境写入。只在私有配置中添加自己拥有的前缀根。
+managed_roots = []
+
+[runs]
+# plan 的有效期（分钟）。plan 是对节点的一次断言（这些核空闲、这张卡没被占），
+# 断言会过期：超过这个时间再 submit 会被拒绝，要求重新 plan。0 = 永不过期。
+plan_ttl_minutes = 30
+
+[storage]
+# 单次扫描最多枚举的条目数与时间上限；超出即标记 incomplete，不能用于清理授权。
+max_entries = 20000
+max_scan_seconds = 30
+# 清理/登记计划的有效期（分钟）；过期必须重新生成并复核。
+plan_ttl_minutes = 30
+# 台账超过这个时间没有刷新就给出过期提醒（不会自动连接节点）。
+stale_scan_hours = 24
+# 每个项目/节点默认保留最近的成功 run 产物（仍可显式 pin 更多）。
+keep_recent_runs = 5
+
+[progress]
+# 长任务必须声明进度契约（否则 plan 阻塞）。确实暂时无法改造脚本时，
+# 可显式降级；降级意味着 RCF 不提供 ETA/停滞证据，也不会假装有。
+enforce_long_runs = true
+# 无契约时允许“显式短冒烟”的时长上限（分钟）。只豁免契约，不是 ETA。
+short_run_minutes = 5
+# 试跑校准的有效期（小时）；过期需重新试跑。
+calibration_max_age_hours = 168
+# rcf run wait / compute_wait_run 的最大阻塞秒数（有界等待，不是后台通知）。
+max_wait_seconds = 60
+# 单次读取进度文件的超时（秒）。
+collect_timeout_seconds = 5
+
+[defaults]
+# 单次探测超时（SSH 慢的链路可以调大）
+probe_timeout = 45
+# 节点资源快照缓存秒数（0 = 每次重新探测）
+inspect_cache_seconds = 60
+# logs 默认回看行数
+log_tail = 200

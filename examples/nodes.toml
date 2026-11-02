@@ -1,0 +1,44 @@
+# Public examples only. Replace paths/SSH aliases in your private RCF home.
+# Never put passwords, tokens or private keys in these files.
+[nodes.local]
+kind = "local"
+name = "Local computer"
+gpus_expected = false
+
+# Optional remote examples. Remove unused nodes; aliases are not real hosts.
+[nodes.cluster]
+kind = "slurm"
+name = "Example Slurm cluster"
+ssh_alias = "example-cluster"
+work_root = "/home/researcher/rcf"
+gpus_expected = false
+
+[nodes.cluster.slurm]
+default_partition = "cpu"
+partitions = ["cpu"]
+# Set account/partition only to values supplied by your administrator.
+
+[nodes.workstation]
+kind = "ssh"
+name = "Example POSIX workstation"
+ssh_alias = "example-workstation"
+work_root = "/home/researcher/rcf"
+gpus_expected = false
+
+[nodes.workstation.ssh]
+connect_timeout = 15
+server_alive_interval = 30
+# Host key verification remains enabled. Verify fingerprints out of band first.
+extra_options = ["-o", "Compression=yes"]
+
+[nodes.windows-wsl]
+kind = "ssh"
+name = "Example Windows and WSL computer"
+ssh_alias = "example-windows"
+work_root = "/mnt/c/rcf-work"
+scp_path_map = { "/mnt/c" = "C:/" }
+
+[nodes.windows-wsl.windows_task]
+distro = "Ubuntu"
+# windows_work_root = "C:/rcf-work"
+# This is opt-in. Confirm distro/path mapping and logged-in session requirements.

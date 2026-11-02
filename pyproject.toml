@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "research-compute-fabric"
+version = "0.1.0"
+description = "RCF - Local-first, agent-first management fabric for heterogeneous research compute nodes"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "RCF" }]
+dependencies = [
+    "pydantic>=2.7",
+    "typer>=0.12",
+    "mcp>=2.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-xdist>=3.6",
+    "ruff>=0.6",
+]
+
+# PEP 735 group: `uv sync` installs this by default.
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-xdist>=3.6",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+rcf = "rcf.cli.main:app"
+rcf-mcp = "rcf.mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rcf"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 110
+
+[tool.ruff.lint]
+select = ["F", "E9", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Typer's documented idiom is a function call in the argument default.
+"src/rcf/cli/main.py" = ["B008"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "integration: tests that need a real reachable node (never enabled by default)",
+    "e2e: end-to-end tests using simulated SSH/Slurm",
+]

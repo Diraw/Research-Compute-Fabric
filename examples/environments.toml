@@ -1,0 +1,24 @@
+# The runnable local example uses RCF's own Python interpreter.
+[environments.system-py]
+kind = "system"
+python = "python"
+python_version = ">=3.11"
+verify_command = "{python} -c 'import json, pathlib; print(\"stdlib ready\")'"
+
+# Optional, read-only module environment. Names are site-specific placeholders.
+# [environments.cluster-modules]
+# kind = "module"
+# python = "python3"
+# modules = ["python/3.11"]
+
+# Optional user-owned prefix, not used by the local example.
+# Creating/modifying it requires a matching managed_roots policy and confirmation.
+# [environments.project-venv]
+# kind = "venv"
+# python = "python3"
+# path = { "cluster" = "/home/researcher/envs/project" }
+# packages = [{ name = "numpy", version = ">=1.26" }]
+
+# MPI launchers must match the cluster MPI/PMI integration. Verify communicator
+# size inside a scheduler allocation instead of assuming process count == ranks.
+# mpi_launcher = "mpiexec -n {tasks}"
