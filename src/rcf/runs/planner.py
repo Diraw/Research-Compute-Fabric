@@ -817,7 +817,7 @@ class RunPlanner:
             interpreter = self.environments.interpreter(env_spec, node)
             if interpreter and len(interpreter) == 1:
                 return interpreter[0]
-        if node.kind is not NodeKind.LOCAL:
+        if node.kind is not NodeKind.LOCAL or os.name != "nt":
             return "python3"
         return "python"
 

@@ -31,7 +31,11 @@ def wait_file(path: Path, timeout: float = 12) -> str:
     until = time.monotonic() + timeout
     while time.monotonic() < until:
         if path.is_file():
-            return path.read_text(encoding="utf-8")
+            text = path.read_text(encoding="utf-8")
+            # A status probe can see the file between create and write on a
+            # loaded runner; never treat that empty observation as evidence.
+            if text.strip():
+                return text
         time.sleep(0.05)
     pytest.fail(f"pilot did not produce {path}")
 
@@ -181,7 +185,15 @@ def test_pilot_deadline_also_covers_environment_setup(tmp_path, bash_binary):
     ex = LocalExecutor(NodeSpec(id="local", kind="local"), tmp_path, SubprocessRunner())
     receipt = ex.submit(spec)
     run_dir = Path(receipt.handle.workdir)
-    assert wait_file(run_dir / "exit_code").strip() == "124"
+    code = wait_file(run_dir / "exit_code").strip()
+    assert code == "124", (
+        code,
+        (run_dir / "run.log").read_text(encoding="utf-8", errors="replace"),
+        (run_dir / "bootstrap.log").read_text(encoding="utf-8", errors="replace")
+        if (run_dir / "bootstrap.log").exists() else "",
+        (run_dir / "pilot.json").read_text(encoding="utf-8", errors="replace")
+        if (run_dir / "pilot.json").exists() else "",
+    )
     assert json.loads(wait_file(run_dir / "pilot.json"))["timed_out"] is True
     # The header records the reviewed command, so only reject its output line.
     assert "\nMUST NOT EXECUTE\n" not in ex.logs(receipt.handle)
@@ -213,7 +225,15 @@ def test_simulated_ssh_executes_uploaded_watchdog_with_preamble(ssh_sandbox, she
                                log_path=posix_fs(run_dir / "run.log"),
                                resources=ResourceRequirements(),
                                command=command, metadata={"pilot_seconds": 8}))
-    assert wait_file(run_dir / "exit_code").strip() == "124"
+    code = wait_file(run_dir / "exit_code").strip()
+    assert code == "124", (
+        code,
+        (run_dir / "run.log").read_text(encoding="utf-8", errors="replace"),
+        (run_dir / "bootstrap.log").read_text(encoding="utf-8", errors="replace")
+        if (run_dir / "bootstrap.log").exists() else "",
+        (run_dir / "pilot.json").read_text(encoding="utf-8", errors="replace")
+        if (run_dir / "pilot.json").exists() else "",
+    )
     report = json.loads(wait_file(run_dir / "pilot.json"))
     assert report["timed_out"] is True
     assert report["timeout_seconds"] == 8

@@ -16,6 +16,8 @@ from rcf.service import RcfService
 
 FIXTURES = Path(__file__).parent / "fixtures"
 PYTHON = sys.executable
+CAT_BIN = "/bin/cat" if sys.platform == "darwin" else "/usr/bin/cat"
+HEAD_BIN = "/usr/bin/head"
 
 DEFAULT_SETTINGS = """\
 [security]
@@ -186,7 +188,7 @@ def ssh_sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bash_binary: st
         'if [ "$1" = "/proc/meminfo" ]; then\n'
         f"  printf '{MEMINFO}'\n"
         "else\n"
-        '  exec /usr/bin/cat "$@"\n'
+        f'  exec {CAT_BIN} "$@"\n'
         "fi\n",
     )
     write_executable(
@@ -195,7 +197,7 @@ def ssh_sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bash_binary: st
         'if [ "$3" = "/proc/meminfo" ] || [ "$1" = "/proc/meminfo" ]; then\n'
         f"  printf '{MEMINFO}'\n"
         "else\n"
-        '  exec /usr/bin/head "$@"\n'
+        f'  exec {HEAD_BIN} "$@"\n'
         "fi\n",
     )
     write_executable(

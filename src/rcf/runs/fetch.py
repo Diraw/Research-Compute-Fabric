@@ -12,6 +12,7 @@ import posixpath
 import re
 import shutil
 import stat
+import sys
 import tarfile
 import tempfile
 import uuid
@@ -232,7 +233,25 @@ def _check_chain(path: Path) -> None:
         except FileNotFoundError:
             continue
         if stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & 0x400:
+            # macOS exposes /var, /tmp and /etc as OS-owned aliases into
+            # /private. They are mount-point indirection, not a user-controlled
+            # symlink component; rejecting them makes every TemporaryDirectory
+            # under /var/folders unusable. Deeper components are still checked.
+            if _is_darwin_system_alias(part):
+                continue
             raise Conflict(f"refusing symlink/reparse path: {part}")
+
+
+def _is_darwin_system_alias(part: Path) -> bool:
+    if sys.platform != "darwin":
+        return False
+    text = str(part)
+    if text not in {"/var", "/tmp", "/etc"}:
+        return False
+    try:
+        return os.path.realpath(text).startswith("/private/")
+    except OSError:
+        return False
 
 
 def _prepare_destination(dest: Path, *, force: bool) -> None:

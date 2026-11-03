@@ -127,6 +127,10 @@ def test_recover_accepted_slurm_submission_after_lost_reply(service, ssh_sandbox
     assert same["handle"]["job_id"] is None
     assert len(list((ssh_sandbox.host / ".fake_slurm" / "jobs").glob("*.json"))) == 1
     recovered = service.get_run(plan["run_id"])
+    deadline = time.time() + 5
+    while recovered["state"] == "unknown" and time.time() < deadline:
+        time.sleep(0.1)
+        recovered = service.get_run(plan["run_id"])
     assert recovered["state"] == "pending"
     assert recovered["handle"]["job_id"].isdigit()
     assert not recovered["handle"]["extra"].get("submission_uncertain")

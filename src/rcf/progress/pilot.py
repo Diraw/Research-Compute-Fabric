@@ -7,7 +7,9 @@ executor supervisors). Controller-side code only serializes reviewed commands.
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 from typing import Any
 
 from ..core.errors import ExecutorError
@@ -240,7 +242,8 @@ def main():
         env.setdefault("RCF_PROGRESS_FILE", os.path.join(run_dir, "progress.jsonl"))
         argv = list(spec["argv"])
         # On Windows PATH may resolve a WSL launcher, not inherited Git Bash.
-        bash = os.environ.get("SHELL", "bash") if os.name == "nt" else "bash"
+        bash = (spec.get("bash") or os.environ.get("RCF_TEST_BASH")
+                or (os.environ.get("SHELL", "bash") if os.name == "nt" else "bash"))
         if os.path.basename(bash).lower() not in ("bash", "bash.exe"):
             bash = "bash"
         shell = bool(spec.get("shell"))
@@ -306,6 +309,41 @@ if __name__ == "__main__":
 '''
 
 
+def local_bash() -> str | None:
+    """Return a usable Git Bash path for a local Windows pilot, if any.
+
+    ``bash`` on PATH may be the System32 WSL launcher, which cannot execute a
+    Windows Python path. Prefer an explicit test override or Git for Windows.
+    """
+
+    if os.name != "nt":
+        return None
+    candidates: list[str] = []
+    override = os.environ.get("RCF_TEST_BASH")
+    if override:
+        candidates.append(override)
+    if on_path := shutil.which("bash"):
+        candidates.append(on_path)
+    roots = [
+        os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Git"),
+        os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "Git"),
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Git"),
+    ]
+    for root in roots:
+        candidates.extend((
+            os.path.join(root, "bin", "bash.exe"),
+            os.path.join(root, "usr", "bin", "bash.exe"),
+        ))
+    for candidate in candidates:
+        if not candidate or not os.path.isfile(candidate):
+            continue
+        parts = candidate.replace("/", "\\").lower().split("\\")
+        if {"system32", "sysnative", "windowsapps"} & set(parts):
+            continue
+        return candidate
+    return None
+
+
 def pilot_timeout(metadata: dict[str, Any]) -> int | None:
     """Reject malformed metadata rather than silently running without a limit."""
     value = metadata.get("pilot_seconds")
@@ -317,6 +355,7 @@ def pilot_timeout(metadata: dict[str, Any]) -> int | None:
 def pilot_files(
     command: PlannedCommand, timeout_seconds: int | None, *, posix_shell: bool = True,
     preamble: list[str] | None = None, calibration_pilot: bool = True,
+    bash: str | None = None,
 ) -> dict[str, str]:
     """Files to write/upload alongside run.sh; never shell-serialize argv."""
     if timeout_seconds is None:
@@ -332,6 +371,7 @@ def pilot_files(
             "preamble": command.preamble if preamble is None else preamble,
             "posix_shell": posix_shell,
             "calibration_pilot": bool(calibration_pilot),
+            **({"bash": bash} if bash else {}),
         }, ensure_ascii=False, sort_keys=True),
     }
 

@@ -1,8 +1,8 @@
 # 功能完成度与验收状态
 
-> 更新：2026-11-02。**当前工作树离线集成验收通过**，不是已上传/已发布版本。
-> 测试环境：Windows / Python 3.12.3。结果只代表本轮公开候选，不沿用私有设备记录。
-> 原生 Linux/macOS、远端 CI 与真实计算节点未在本轮执行。
+> 更新：2026-11-03。**当前工作树离线集成验收通过**，不是已上传/已发布版本。
+> 测试环境：Windows / Python 3.12.3；macOS arm64 / Python 3.12.16（真实 mac 节点）。
+> 原生 Linux 与远端 GitHub CI 未在本轮执行；macOS 已在真实节点复核。
 > 下表命令按本机 Windows 记录；其他平台把 `.venv/Scripts/python.exe` 换成
 > `.venv/bin/python`，或使用等价的 `uv run python`。
 
@@ -40,7 +40,8 @@
 
 | 项目 | 命令/证据 | 结果 |
 | --- | --- | --- |
-| 离线全套 | `uv run --frozen --offline pytest -m "not integration" -n 8 -p no:cacheprovider` | **1029 passed / 8 skipped**，115.81 秒 |
+| 离线全套（Windows） | `uv run --frozen --offline pytest -m "not integration" -o addopts="--strict-markers" -q -p no:cacheprovider` | **1027 passed / 10 skipped**，357.70 秒 |
+| 离线全套（macOS arm64） | `.venv/bin/python -m pytest -m "not integration" -o addopts="--strict-markers" -q -p no:cacheprovider` | **994 passed / 43 skipped**，114.78 秒 |
 | 公开材料扫描 | `uv run --frozen --offline python tools/publication_check.py --source . --include-code` | **通过，0 findings**；启发式，不扫描历史 |
 | 源码/测试扫描 | 覆盖 src/tests/tools，合成安全测试使用运行时构造数据 | **通过，0 findings** |
 | 外部可用示例 | `uv run --frozen --offline python examples/quickstart.py` | **通过**；临时独立 home、本机 CPU 作业，确定性结果核对成功 |

@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -228,8 +229,8 @@ def test_permission_failure_is_not_empty_success(run_dir: Path) -> None:
 
 
 @pytest.mark.skipif(
-    not os.name == "posix" or not hasattr(os, "geteuid") or os.geteuid() == 0,
-    reason="execute-only ancestor permissions require a non-root POSIX user",
+    sys.platform != "linux" or not hasattr(os, "geteuid") or os.geteuid() == 0,
+    reason="execute-only ancestor traversal needs Linux O_PATH and a non-root user",
 )
 def test_execute_only_ancestor_is_traversed_without_read_permission(tmp_path: Path) -> None:
     locked = tmp_path / "locked"

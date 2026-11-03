@@ -26,7 +26,7 @@ from ..core.models import (
     SubmissionReceipt,
 )
 from ..core.runner import Runner, spawn_detached
-from ..progress.pilot import pilot_files, pilot_timeout
+from ..progress.pilot import local_bash, pilot_files, pilot_timeout
 from ..storage.output_probe import local_output_manifest
 from .base import BaseExecutor
 
@@ -139,7 +139,8 @@ class LocalExecutor(BaseExecutor):
         run_dir = Path(spec.run_dir) if spec.run_dir else self.run_dir(spec.run_id)
         run_dir.mkdir(parents=True, exist_ok=True)
         files = pilot_files(spec.command, pilot_timeout(spec.metadata), posix_shell=False,
-                                          calibration_pilot=spec.metadata.get("pilot_requested", True))
+                                          calibration_pilot=spec.metadata.get("pilot_requested", True),
+                                          bash=local_bash())
         for name, text in files.items():
             (run_dir / name).write_text(text, encoding="utf-8")
         supervisor = run_dir / "supervisor.py"
@@ -228,6 +229,17 @@ class LocalExecutor(BaseExecutor):
                 return code.value == STILL_ACTIVE
             finally:
                 kernel32.CloseHandle(handle)
+        # A killed child that the controller has not reaped is a zombie:
+        # kill(pid, 0) still succeeds, so cancel would wait ten seconds and
+        # then report an uncancellable run. Reap it non-blockingly first.
+        try:
+            reaped, _ = os.waitpid(pid, os.WNOHANG)
+            if reaped == pid:
+                return False
+            if reaped == 0:
+                return True
+        except ChildProcessError:
+            pass
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
@@ -285,6 +297,20 @@ class LocalExecutor(BaseExecutor):
 
     def cancel(self, handle: JobHandle) -> JobStatus:
         pid = self._pid(handle)
+        if pid is None:
+            # submit() returns as soon as the detached supervisor is spawned;
+            # the supervisor may not have published pid yet on a loaded host.
+            # Wait briefly instead of reporting an un-cancellable pending run.
+            pid_deadline = time.monotonic() + 2.0
+            while pid is None and time.monotonic() < pid_deadline:
+                time.sleep(0.05)
+                pid = self._pid(handle)
+        if pid is None:
+            fallback = handle.extra.get("supervisor_pid") or handle.job_id
+            if fallback is not None and str(fallback).isdigit():
+                candidate = int(fallback)
+                if self._alive(candidate):
+                    pid = candidate
         if pid is None:
             return JobStatus(state=RunState.UNKNOWN, detail="no pid recorded yet", observed_at=now_utc())
         if not self._alive(pid):

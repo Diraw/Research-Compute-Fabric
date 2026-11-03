@@ -26,6 +26,16 @@ from ..executors.ssh import SshTransport
 MARKER = "@@"
 
 
+def _shell_path(path: str) -> str:
+    """Quote a path while leaving a leading ``~/`` expandable by the shell."""
+
+    if path == "~":
+        return '"$HOME"'
+    if path.startswith("~/"):
+        return '"$HOME"/' + shquote(path[2:])
+    return shquote(path)
+
+
 def build_script(*, work_root: str, token: str, has_scheduler: bool) -> str:
     probe_dir = posixpath.join(work_root, f".rcf-selftest-{token}")
     lines = [
@@ -42,7 +52,7 @@ def build_script(*, work_root: str, token: str, has_scheduler: bool) -> str:
         "printf '%s' shell-pipe-ok | tr 'a-z' 'a-z'",
         "echo",
         'echo "@@work"',
-        f'dir={shquote(probe_dir)}',
+        f'dir={_shell_path(probe_dir)}',
         'if mkdir -p "$dir" 2>/dev/null; then',
         "  echo work=mkdir-ok",
         '  if printf %s probe > "$dir/probe" 2>/dev/null; '

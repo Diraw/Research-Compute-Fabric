@@ -15,6 +15,10 @@ from rcf.executors.ssh import SshTransport
 from rcf.projects.push import ProjectPusher
 
 pytestmark = pytest.mark.e2e
+requires_proc = pytest.mark.skipif(
+    not os.path.exists("/proc/self/stat"),
+    reason="Linux /proc process identity is required for automatic cancel evidence",
+)
 
 
 def test_remote_push_replaces_hardlinks_and_creates_nested_files(slurm_home, ssh_sandbox, tmp_path, monkeypatch):
@@ -42,6 +46,7 @@ def test_remote_push_replaces_hardlinks_and_creates_nested_files(slurm_home, ssh
     assert not os.path.samefile(outside, target / 'value')
 
 
+@requires_proc
 def test_real_run_identity_accepts_only_its_original_script(tmp_path, bash_binary):
     run_dir = tmp_path / 'run'
     run_dir.mkdir()
@@ -69,6 +74,7 @@ kill() {{
     assert 'state=CANCELLED' in result.stdout
 
 
+@requires_proc
 def test_reused_pid_between_term_and_kill_is_not_signalled_again(tmp_path, bash_binary):
     run_dir = tmp_path / 'run'
     run_dir.mkdir()
