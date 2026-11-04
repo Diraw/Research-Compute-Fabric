@@ -295,6 +295,18 @@ class RunManager:
             self.store.record_observation_error(record.run_id, f"observation failed: {exc}"[:600])
             return self.get(record.run_id)
 
+        # A probe that succeeds makes an earlier failure history: the stored
+        # error must not outlive it, otherwise a finished run keeps advertising
+        # an observation failure that no longer describes anything.
+        cleared_error = record.error is not None
+        if cleared_error:
+            record.error = None
+            self._event(
+                record.run_id,
+                "observe_recovered",
+                "observation recovered; previous error cleared",
+            )
+
         uncertain = record.handle.extra.get("submission_uncertain", False)
         if uncertain and status.state is RunState.PENDING and not record.handle.job_id:
             # An empty directory only proves an upload, not an accepted launch.
@@ -304,9 +316,18 @@ class RunManager:
         )
         if recovered:
             record.handle.extra.pop("submission_uncertain", None)
-        changed = recovered or status.state is not record.state or status.exit_code != record.exit_code
+        changed = (
+            cleared_error
+            or recovered
+            or status.state is not record.state
+            or status.exit_code != record.exit_code
+        )
         record.state = status.state
         record.exit_code = status.exit_code if status.exit_code is not None else record.exit_code
+        # The probe succeeded: this is when the saved state became known-true.
+        # ``last_observed_at`` also moves on failed attempts, so staleness must
+        # not be computed from it.
+        record.state_observed_at = status.observed_at
         record.last_observed_at = status.observed_at
         if status.state.terminal and record.finished_at is None:
             record.finished_at = status.finished_at or status.observed_at
@@ -386,6 +407,7 @@ class RunManager:
         record.state = status.state
         record.exit_code = status.exit_code if status.exit_code is not None else record.exit_code
         record.finished_at = now_utc()
+        record.state_observed_at = status.observed_at
         record.last_observed_at = status.observed_at
         if not self.store.update_run(record):
             return self.get(run_id)
@@ -507,6 +529,24 @@ class RunManager:
             return
         if contract is OutputContract.NONE:
             # Declared as unmanaged: an empty output dir is expected, not a fault.
+            # Record it once so a reader can tell "nothing to check" from "checked empty".
+            self._event(
+                record.run_id,
+                "output_contract_unmanaged",
+                "project declares output_contract=none; artifact location was not verified",
+            )
+            return
+        plan = self.store.get_plan(record.plan_id) if record.plan_id else None
+        if plan is not None and plan.request.command_override:
+            # The plan already warned that an override hides where artifacts go.
+            # Marking a violation here would contradict that warning and punish a
+            # legitimate probe command for not writing into the project's outputs.
+            self._event(
+                record.run_id,
+                "output_contract_unchecked",
+                "command_override was used; RCF cannot verify where artifacts go",
+                {"result_dir": record.result_dir},
+            )
             return
         manifest_fn = getattr(executor, "result_manifest", None)
         if not callable(manifest_fn):

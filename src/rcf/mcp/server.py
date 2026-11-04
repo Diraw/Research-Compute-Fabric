@@ -36,6 +36,8 @@ RCF manages research compute nodes (local, SSH workstations and Slurm clusters).
 Typical flow:
 1. compute_list_nodes / compute_inspect_node — see what exists and what is free.
 2. compute_list_projects + compute_inspect_environment — check the code and environment.
+   Missing package? compute_plan_environment shows the exact commands; only then
+   compute_apply_environment(confirm=true). RCF writes only prefixes it owns.
 3. compute_plan_run — get a reviewable plan (node, command, checks). No side effects.
 4. compute_submit_run(plan_id, confirm=true) — submit only after the user approves.
 5. compute_get_run / compute_get_run_progress / compute_get_logs / compute_collect_results — follow the run.
@@ -111,6 +113,30 @@ TOOL_SPECS: list[ToolSpec] = [
         description="Run the configured environment verification command only with confirm=true; execution permission required.",
         service_method="verify_environment",
         cli_path=("env", "verify"),
+        read_only=False,
+    ),
+    ToolSpec(
+        name="compute_plan_environment",
+        dotted="compute.plan_environment",
+        description=(
+            "Plan how to create or complete an environment on one node: exact commands, missing "
+            "packages, network needs and the ownership verdict. Read-only: nothing is installed "
+            "and no directory is created."
+        ),
+        service_method="plan_environment",
+        cli_path=("env", "plan"),
+        read_only=True,
+    ),
+    ToolSpec(
+        name="compute_apply_environment",
+        dotted="compute.apply_environment",
+        description=(
+            "Execute a reviewed environment plan (conda create/install or venv+pip). Requires "
+            "confirm=true. RCF only writes prefixes it owns (managed_roots or managed=true) and "
+            "refuses plans with blockers; every write is audited."
+        ),
+        service_method="apply_environment",
+        cli_path=("env", "apply"),
         read_only=False,
     ),
     ToolSpec(
@@ -432,6 +458,29 @@ def build_server(home: str | None = None, *, actor: str = "mcp") -> MCPServer:
         """Execute a reviewed verification command only after explicit approval."""
         return await runtime.run(runtime.service.verify_environment, env_id, node_id, confirm=confirm)
 
+    async def compute_plan_environment(env_id: str, node_id: str) -> str:
+        """Plan an environment install without touching the node.
+
+        Args:
+            env_id: Environment id as declared in environments.toml.
+            node_id: Node the environment should live on.
+        """
+        return await runtime.run(runtime.service.plan_environment, env_id, node_id)
+
+    async def compute_apply_environment(env_id: str, node_id: str, confirm: bool = False) -> str:
+        """Execute a reviewed environment plan (conda/venv install or completion).
+
+        Args:
+            env_id: Environment id as declared in environments.toml.
+            node_id: Node to install on.
+            confirm: Must be true; asserts the plan returned by
+                compute_plan_environment was reviewed.  RCF still refuses a prefix
+                it does not own and any plan with blockers.
+        """
+        return await runtime.run(
+            runtime.service.apply_environment, env_id, node_id, confirmed=confirm
+        )
+
     async def compute_list_projects() -> str:
         """List research projects."""
         return await runtime.run(runtime.service.list_projects)
@@ -720,6 +769,8 @@ def build_server(home: str | None = None, *, actor: str = "mcp") -> MCPServer:
         "compute_list_environments": compute_list_environments,
         "compute_inspect_environment": compute_inspect_environment,
         "compute_verify_environment": compute_verify_environment,
+        "compute_plan_environment": compute_plan_environment,
+        "compute_apply_environment": compute_apply_environment,
         "compute_list_projects": compute_list_projects,
         "compute_plan_run": compute_plan_run,
         "compute_submit_run": compute_submit_run,

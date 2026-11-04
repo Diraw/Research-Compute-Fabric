@@ -175,8 +175,8 @@ def test_uv_build_is_strictly_offline(source: Path, tmp_path: Path, monkeypatch)
     assert kwargs["cwd"] == source
 
 
-@pytest.mark.parametrize("count, accepted", [(29, True), (28, False)])
-def test_release_requires_exactly_29_tools_and_records_evidence(
+@pytest.mark.parametrize("count, accepted", [(31, True), (30, False)])
+def test_release_requires_exactly_31_tools_and_records_evidence(
     source: Path, tmp_path: Path, monkeypatch, count: int, accepted: bool,
 ) -> None:
     if not shutil.which("uv"):
@@ -196,7 +196,7 @@ def test_release_requires_exactly_29_tools_and_records_evidence(
     if accepted:
         assert release.release_check(source, output)["ok"] is True
     else:
-        with pytest.raises(release.ReleaseCheckError, match="must be exactly 29, got 28"):
+        with pytest.raises(release.ReleaseCheckError, match="must be exactly 31, got 30"):
             release.release_check(source, output)
     evidence = json.loads((output / "evidence.json").read_text(encoding="utf-8"))
     assert evidence["ok"] is accepted
@@ -246,7 +246,7 @@ def test_smoke_uses_external_venv_isolated_imports_and_offline_install(
         if "import sysconfig; print(sysconfig.get_path('purelib'))" in argv:
             return str(external / "venv" / "lib") + "\n"
         if release.SMOKE_SCRIPT in argv:
-            return json.dumps({"tool_count": 29, "tools": []})
+            return json.dumps({"tool_count": 31, "tools": []})
         if "node" in argv:
             return "[]\n"
         return ""

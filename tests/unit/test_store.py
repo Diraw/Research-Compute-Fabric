@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from threading import Barrier
 
 import pytest
 
@@ -89,6 +91,31 @@ def test_leases_are_exclusive_and_releasable(store):
     store.release_leases("run_1")
     assert store.active_leases("ws") == {}
     store.acquire_leases(run_id="run_2", node_id="ws", keys=["GPU-b"])
+
+
+def test_concurrent_lease_acquisition_has_exactly_one_winner(tmp_path):
+    """The partial unique index, not the Python lock, decides the winner."""
+
+    path = tmp_path / "leases.db"
+    first, second = Store(path), Store(path)
+    gate = Barrier(2)
+
+    def take(store: Store, run_id: str) -> str | None:
+        gate.wait(timeout=10)
+        try:
+            store.acquire_leases(run_id=run_id, node_id="ws", keys=["GPU-0"])
+            return run_id
+        except Conflict:
+            return None
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(take, [first, second], ["run_1", "run_2"]))
+        assert results.count(None) == 1
+        assert len(first.active_leases("ws")) == 1
+    finally:
+        first.close()
+        second.close()
 
 
 def test_events_keep_order(store):

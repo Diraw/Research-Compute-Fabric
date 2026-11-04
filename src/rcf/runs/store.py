@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS runs (
     idempotency_key TEXT,
     error TEXT,
     last_observed_at TEXT,
+    state_observed_at TEXT,
     contract_violation INTEGER NOT NULL DEFAULT 0,
     git_commit TEXT,
     git_dirty INTEGER NOT NULL DEFAULT 0,
@@ -171,10 +172,20 @@ class Store:
             "git_commit": "ALTER TABLE runs ADD COLUMN git_commit TEXT",
             "git_dirty": "ALTER TABLE runs ADD COLUMN git_dirty INTEGER NOT NULL DEFAULT 0",
             "inputs_json": "ALTER TABLE runs ADD COLUMN inputs_json TEXT",
+            "state_observed_at": "ALTER TABLE runs ADD COLUMN state_observed_at TEXT",
         }
         for column, statement in additions.items():
             if column not in existing:
                 self._conn.execute(statement)
+        # Rows written before the error-clearing fix: a *succeeded* run cannot
+        # carry a live observation error.  Only that exact, provable case is
+        # cleared; failed runs keep their error for diagnosis.  Databases old
+        # enough to lack the column are left untouched.
+        if {"error", "state"} <= existing:
+            self._conn.execute(
+                "UPDATE runs SET error=NULL WHERE state='succeeded'"
+                " AND error LIKE 'observation failed:%'"
+            )
 
     def close(self) -> None:
         with self._lock:
@@ -210,11 +221,11 @@ class Store:
                     "INSERT INTO runs(run_id, plan_id, project_id, node_id, executor, state, created_at,"
                     " submitted_at, finished_at, exit_code, params_json, command_json, workdir, log_path,"
                     " result_dir, env_id, env_fingerprint, handle_json, idempotency_key, error, last_observed_at,"
-                    " contract_violation, git_commit, git_dirty, inputs_json)"
+                    " state_observed_at, contract_violation, git_commit, git_dirty, inputs_json)"
                     " VALUES (:run_id, :plan_id, :project_id, :node_id, :executor, :state, :created_at,"
                     " :submitted_at, :finished_at, :exit_code, :params_json, :command_json, :workdir, :log_path,"
                     " :result_dir, :env_id, :env_fingerprint, :handle_json, :idempotency_key, :error,"
-                    " :last_observed_at, :contract_violation, :git_commit, :git_dirty, :inputs_json)",
+                    " :last_observed_at, :state_observed_at, :contract_violation, :git_commit, :git_dirty, :inputs_json)",
                     payload,
                 )
                 self._conn.commit()
@@ -295,7 +306,8 @@ class Store:
                 "UPDATE runs SET state=:state, submitted_at=:submitted_at, finished_at=:finished_at,"
                 " exit_code=:exit_code, command_json=:command_json, workdir=:workdir, log_path=:log_path,"
                 " result_dir=:result_dir, handle_json=:handle_json, error=:error,"
-                " last_observed_at=:last_observed_at, env_fingerprint=:env_fingerprint,"
+                " last_observed_at=:last_observed_at, state_observed_at=:state_observed_at,"
+                " env_fingerprint=:env_fingerprint,"
                 " contract_violation=:contract_violation, git_commit=:git_commit, git_dirty=:git_dirty,"
                 " inputs_json=:inputs_json"
                 " WHERE run_id=:run_id AND state NOT IN ('succeeded','failed','cancelled','lost')",
@@ -538,6 +550,7 @@ class Store:
             "idempotency_key": record.idempotency_key,
             "error": record.error,
             "last_observed_at": iso(record.last_observed_at),
+            "state_observed_at": iso(record.state_observed_at),
             "contract_violation": 1 if record.contract_violation else 0,
             "git_commit": record.git_commit,
             "git_dirty": 1 if record.git_dirty else 0,
@@ -568,6 +581,7 @@ class Store:
             idempotency_key=row["idempotency_key"],
             error=row["error"],
             last_observed_at=parse_iso(row["last_observed_at"]),
+            state_observed_at=parse_iso(row["state_observed_at"]),
             contract_violation=bool(row["contract_violation"]),
             git_commit=row["git_commit"],
             git_dirty=bool(row["git_dirty"]),

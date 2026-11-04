@@ -108,6 +108,12 @@ def test_declared_inputs_are_resolved_and_recorded(tmp_path, project_dir):
             + (project_dir / "data" / "b.dat").stat().st_size
         )
         assert len(manifest["digest"]) == 64
+
+        # The run must carry the same manifest, not just the plan: a digest
+        # that only exists before submission cannot reproduce anything.
+        record = svc.submit_run(plan["plan_id"], confirm=True)
+        assert record["inputs"]["digest"] == manifest["digest"]
+        assert [f["path"] for f in record["inputs"]["files"]] == ["data/a.dat", "data/b.dat"]
     finally:
         svc.close()
 

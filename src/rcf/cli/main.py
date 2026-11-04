@@ -38,6 +38,7 @@ class CliState:
 
 app = typer.Typer(
     no_args_is_help=True,
+    invoke_without_command=True,
     add_completion=False,
     help="Research Compute Fabric — nodes, environments and runs for AI Agents.",
 )
@@ -76,12 +77,18 @@ def _configure_stdio() -> None:
 @app.callback()
 def main(
     ctx: typer.Context,
+    version: bool = typer.Option(
+        False, "--version", is_eager=True, help="Print the RCF version and exit."
+    ),
     home: Path | None = typer.Option(None, "--home", envvar="RCF_HOME", help="RCF home directory."),
     as_json: bool = typer.Option(
         False, "--json", help="Machine readable output (global; also via RCF_JSON=1)."
     ),
 ) -> None:
     _configure_stdio()
+    if version:
+        typer.echo(f"rcf {__version__}")
+        raise typer.Exit()
     env_json = os.environ.get("RCF_JSON", "").strip().lower() in {"1", "true", "yes"}
     ctx.obj = CliState(home=home, as_json=as_json or env_json)
 
@@ -846,6 +853,23 @@ def _wait_seconds(value: float) -> float:
     return value
 
 
+def _observed_label(payload: dict[str, Any]) -> str:
+    """Compact freshness marker: an old claim must not read like a live one."""
+
+    seconds = payload.get("observed_age_seconds")
+    if seconds is None:
+        return "-"
+    if seconds < 90:
+        label = f"{seconds:.0f}s"
+    elif seconds < 5400:
+        label = f"{seconds / 60:.0f}m"
+    elif seconds < 172800:
+        label = f"{seconds / 3600:.0f}h"
+    else:
+        label = f"{seconds / 86400:.0f}d"
+    return f"{label} STALE" if payload.get("stale") else label
+
+
 def _progress_human(payload: dict[str, Any]) -> None:
     """Keep progress evidence readable without dumping potentially long sample tails."""
     progress = payload.get("progress")
@@ -1056,8 +1080,10 @@ def run_status(
                 ("created", payload["created_at"]),
                 ("submitted", payload["submitted_at"]),
                 ("finished", payload["finished_at"]),
+                ("observed", _observed_label(payload)),
                 ("log", payload["log_path"]),
                 ("error", payload["error"]),
+                ("diagnosis", (payload.get("diagnosis") or {}).get("message")),
             ],
         )
         if isinstance(payload.get("progress"), dict):
@@ -1088,9 +1114,17 @@ def run_list(
 
     def human(rows: list[dict[str, Any]]) -> None:
         render.table(
-            ["run id", "state", "node", "project", "created", "exit"],
+            ["run id", "state", "observed", "node", "project", "created", "exit"],
             [
-                [r["run_id"], r["state"], r["node_id"], r["project_id"] or "-", r["created_at"], r["exit_code"]]
+                [
+                    r["run_id"],
+                    r["state"],
+                    _observed_label(r),
+                    r["node_id"],
+                    r["project_id"] or "-",
+                    r["created_at"],
+                    r["exit_code"],
+                ]
                 for r in rows
             ],
         )

@@ -10,6 +10,7 @@ import typer.main
 from conftest import make_home, toml_path
 from typer.testing import CliRunner
 
+from rcf import __version__
 from rcf.cli.main import app
 from rcf.mcp.server import TOOL_SPECS, build_server
 from rcf.service import RcfService
@@ -37,6 +38,14 @@ def home(tmp_path):
 
 def invoke(home, *args: str):
     return CliRunner().invoke(app, ["--home", str(home), *args])
+
+
+def test_cli_version_flag_matches_the_command(home):
+    flag = CliRunner().invoke(app, ["--version"])
+    sub = CliRunner().invoke(app, ["version"])
+
+    assert flag.exit_code == 0, flag.output
+    assert flag.output.strip() == sub.output.strip() == f"rcf {__version__}"
 
 
 def test_cli_node_list_json(home):

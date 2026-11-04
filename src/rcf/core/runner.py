@@ -268,7 +268,15 @@ def classify_ssh_failure(result: CommandResult, *, alias: str) -> Exception:
         )
     return ExecutorError(
         f"ssh command failed on {alias!r}: {result.first_error_line()}",
-        detail={"alias": alias, "returncode": result.returncode},
+        detail={
+            "alias": alias,
+            "returncode": result.returncode,
+            # ssh can fail before the remote command runs (missing environment,
+            # agent pipe, broken config) and then writes only to stderr.  An
+            # exit code alone is not diagnosable, so keep ssh's own words.
+            "stderr": result.stderr.strip()[:400],
+            "stdout": result.stdout.strip()[:200],
+        },
     )
 
 

@@ -71,6 +71,10 @@ class RunSettings(SpecModel):
     """
 
     plan_ttl_minutes: int = 30
+    #: A saved run state is only a claim about the node.  When a probe fails RCF
+    #: keeps the last known state, so readers must know how old that claim is.
+    #: Records older than this (and not terminal) are reported as ``stale``.
+    stale_after_seconds: int = 300
 
 
 class DefaultsSettings(SpecModel):

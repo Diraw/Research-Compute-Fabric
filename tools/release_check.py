@@ -292,9 +292,9 @@ def release_check(source: Path, output: Path) -> dict[str, Any]:
         for name, digest in manifest.items():
             if sha256((delivered / name).read_bytes()) != digest or sha256((source / name).read_bytes()) != digest:
                 raise ReleaseCheckError(f"source changed during release acceptance: {name}")
-        if evidence["smoke"]["tool_count"] != 29:
+        if evidence["smoke"]["tool_count"] != 31:
             raise ReleaseCheckError(
-                f"MCP tool count must be exactly 29, got {evidence['smoke']['tool_count']}: "
+                f"MCP tool count must be exactly 31, got {evidence['smoke']['tool_count']}: "
                 f"{evidence['smoke']['tools']}"
             )
         evidence["ok"] = True

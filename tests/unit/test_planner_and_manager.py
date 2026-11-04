@@ -512,11 +512,15 @@ paths = {{ "laptop" = "{toml_path(project_dir)}" }}
         service.close()
 
 
-def test_run_without_artifacts_is_flagged(svc, project_dir):
+def test_run_without_artifacts_is_flagged(svc, project_dir, monkeypatch):
     """The contract is verified after the fact, not just in the template."""
 
     (project_dir / "silent.py").write_text("print('nothing produced')\n", encoding="utf-8")
-    plan = svc.plan_run({"project_id": "demo", "command_override": "{python} silent.py"})
+    project = svc.config.project("demo")
+    monkeypatch.setattr(
+        svc.config, "project", lambda pid: project.model_copy(update={"script": "silent.py"})
+    )
+    plan = svc.plan_run({"project_id": "demo", "params": {"seed": 1, "seconds": 0}})
     record = svc.submit_run(plan["plan_id"], confirm=True)
     done = wait_state(svc, record["run_id"], {"succeeded", "failed"})
 
@@ -524,6 +528,21 @@ def test_run_without_artifacts_is_flagged(svc, project_dir):
     assert done["contract_violation"] is True
     events = [e.kind for e in svc.runs.events(record["run_id"])]
     assert "output_contract_violation" in events
+
+
+def test_command_override_is_not_flagged_as_a_contract_violation(svc, project_dir):
+    """A probe command is not the project entrypoint; do not call it a violation."""
+
+    (project_dir / "silent.py").write_text("print('probe only')\n", encoding="utf-8")
+    plan = svc.plan_run({"project_id": "demo", "command_override": "{python} silent.py"})
+    record = svc.submit_run(plan["plan_id"], confirm=True)
+    done = wait_state(svc, record["run_id"], {"succeeded", "failed"})
+
+    assert done["state"] == "succeeded"
+    assert done["contract_violation"] is False
+    events = [e.kind for e in svc.runs.events(record["run_id"])]
+    assert "output_contract_unchecked" in events
+    assert "output_contract_violation" not in events
 
 
 def test_compliant_run_is_not_flagged(svc):

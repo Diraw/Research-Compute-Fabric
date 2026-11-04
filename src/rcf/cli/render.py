@@ -6,7 +6,7 @@ from typing import Any
 
 import typer
 
-STATUS_MARK = {"ok": "+", "warn": "!", "fail": "x", "unknown": "?", "skipped": "-"}
+STATUS_MARK = {"ok": "+", "warn": "!", "info": "i", "fail": "x", "unknown": "?", "skipped": "-"}
 
 
 def kv_block(title: str, rows: list[tuple[str, Any]]) -> None:

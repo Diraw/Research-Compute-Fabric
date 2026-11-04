@@ -201,7 +201,7 @@ def test_progress_specs_cli_and_mcp_schema(service):
         "compute_get_run_progress": ("get_run_progress", ("run", "progress")),
         "compute_wait_run": ("wait_run", ("run", "wait")),
     }
-    assert len(TOOL_SPECS) == 29
+    assert len(TOOL_SPECS) == 31
     specs = {spec.name: spec for spec in TOOL_SPECS}
     tools = {tool.name: tool for tool in asyncio.run(build_server().list_tools())}
     assert set(tools) == set(specs)

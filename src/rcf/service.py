@@ -15,7 +15,7 @@ from typing import Any
 
 from .core.config import Config, default_home
 from .core.errors import NotFound, RcfError, UnsupportedOperation
-from .core.ids import new_id
+from .core.ids import new_id, now_utc
 from .core.models import (
     EnvironmentPlan,
     EnvironmentView,
@@ -96,6 +96,51 @@ class RcfService:
         if self._runs is None:
             self._runs = RunManager(self.config, self.store, self.planner, self.runner)
         return self._runs
+
+    def _run_payload(self, record: RunRecord) -> dict[str, Any]:
+        """Run record plus how fresh its state claim is.
+
+        ``state`` alone cannot tell a live run from a cached one: when a probe
+        fails RCF keeps the last known state on purpose.  Every reader (CLI,
+        MCP, a dashboard) therefore gets ``observed_age_seconds`` and ``stale``
+        so it never presents a three-day-old claim as "running".
+        """
+
+        payload = record.model_dump(mode="json")
+        stale_after = self.config.settings.runs.stale_after_seconds
+        # Age of the *claim*, not of the last attempt: a failed probe refreshes
+        # last_observed_at, and using it would make a dead node look healthy.
+        basis = record.state_observed_at or record.submitted_at
+        if basis is None:
+            # Nothing has claimed anything about a node yet (e.g. a plan that
+            # was never submitted): not stale, just unobserved.
+            payload["observed_age_seconds"] = None
+            payload["stale"] = False
+            return payload
+        age = (now_utc() - basis).total_seconds()
+        payload["observed_age_seconds"] = round(max(age, 0.0), 3)
+        payload["stale"] = (not record.state.terminal) and age > stale_after
+        payload["stale_after_seconds"] = stale_after
+        return payload
+
+    @staticmethod
+    def _latest_diagnosis(events: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """Return the most recent structured failure diagnosis, if any.
+
+        Diagnosis events are written when a run reaches a terminal failure.
+        Lifting the latest one to the top level means a reader does not have to
+        scan the event list to answer "why did it fail?"; the full events stay
+        available unchanged.
+        """
+
+        for event in reversed(events):
+            if event.get("kind") == "diagnosis":
+                return {
+                    "at": event.get("at"),
+                    "message": event.get("message", ""),
+                    "data": event.get("data") or {},
+                }
+        return None
 
     @property
     def storage(self):
@@ -390,13 +435,23 @@ class RcfService:
         env = self.config.environment(env_id)
         node = self.config.node(node_id)
         plan: EnvironmentPlan = self.environments.plan(env, node)
+        # Record the tier the policy actually enforced (EXECUTE) and the one
+        # piece of evidence that decided it.  "environment_mutation" is not a
+        # gate for this operation, so auditing it as such misleads both humans
+        # and Agents into looking for a boolean that does not matter.
         self.store.record_audit(
             actor=self.actor,
             operation="environment.apply",
-            tier="environment_mutation",
+            tier="execute",
             decision="attempted",
             node_id=node.id,
-            detail={"env_id": env.id, "steps": [s.command for s in plan.steps]},
+            detail={
+                "env_id": env.id,
+                "steps": [s.command for s in plan.steps],
+                "gate": "path ownership + explicit confirmation",
+                "action": plan.action,
+                "requires_authorization": plan.requires_authorization,
+            },
         )
         results = self.environments.apply(plan, env, node, confirmed=confirmed)
         return {
@@ -475,12 +530,13 @@ class RcfService:
         record = self.runs.submit(
             plan_id, idempotency_key=idempotency_key, confirmed=confirm, actor=self.actor
         )
-        return record.model_dump(mode="json")
+        return self._run_payload(record)
 
     def get_run(self, run_id: str, *, refresh: bool = True) -> dict[str, Any]:
         record = self.runs.refresh(run_id) if refresh else self.runs.get(run_id)
-        payload = record.model_dump(mode="json")
+        payload = self._run_payload(record)
         payload["events"] = [e.model_dump(mode="json") for e in self.runs.events(run_id, limit=50)]
+        payload["diagnosis"] = self._latest_diagnosis(payload["events"])
         from .progress.store import ProgressStore
 
         plan = self.store.get_plan(record.plan_id) if record.plan_id else None
@@ -495,7 +551,7 @@ class RcfService:
 
     def list_runs(self, *, limit: int = 20, state: str | None = None) -> list[dict[str, Any]]:
         parsed = RunState(state) if state else None
-        return [r.model_dump(mode="json") for r in self.runs.list(limit=limit, state=parsed)]
+        return [self._run_payload(r) for r in self.runs.list(limit=limit, state=parsed)]
 
     def get_logs(self, run_id: str, *, tail: int = 200) -> dict[str, Any]:
         text = self.runs.logs(run_id, tail=tail)
@@ -508,7 +564,7 @@ class RcfService:
         }
 
     def cancel_run(self, run_id: str, *, confirm: bool = False) -> dict[str, Any]:
-        return self.runs.cancel(run_id, confirmed=confirm, actor=self.actor).model_dump(mode="json")
+        return self._run_payload(self.runs.cancel(run_id, confirmed=confirm, actor=self.actor))
 
     def fetch_results(
         self, run_id: str, *, dest: str, force: bool = False, confirm: bool = False
@@ -582,6 +638,20 @@ class RcfService:
             bool(self.config.environments),
             f"{len(self.config.environments)} environment(s) declared",
             warn_only=True,
+        )
+        checks.append(
+            {
+                "name": "security.allow_environment_mutation",
+                "status": "info",
+                # Printed by doctor historically; it never gated environment
+                # writes.  Say so once, next to the flag, instead of letting
+                # every reader infer a permission that does not exist.
+                "detail": (
+                    "legacy/compat field, not a gate: environment.apply requires the "
+                    "execute tier plus path ownership (managed_roots or managed=true) "
+                    "and an explicit confirmation"
+                ),
+            }
         )
         for node in self.config.nodes.values():
             add(

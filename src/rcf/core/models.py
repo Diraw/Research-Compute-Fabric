@@ -895,6 +895,10 @@ class RunRecord(RuntimeModel):
     #: i.e. the project's artifact contract was not honoured.
     contract_violation: bool = False
     last_observed_at: datetime | None = None
+    #: When the saved *state* was last confirmed by a successful probe.
+    #: ``last_observed_at`` records attempts (including failed ones), so it can
+    #: be fresh while the state itself is days old.
+    state_observed_at: datetime | None = None
 
 
 class RunEvent(RuntimeModel):
