@@ -75,7 +75,7 @@ env = { RCF_HOME = "C:/Users/you/.rcf" }
 ## 3. 工具清单
 
 设计文档里的点号名字（`compute.list_nodes`）在多数客户端不合法（名字只允许 `[A-Za-z0-9_-]`），
-所以实际注册名用下划线。两者由 `TOOL_SPECS` 一一对应，并有测试保证不漂移。当前共 29 个工具。
+所以实际注册名用下划线。两者由 `TOOL_SPECS` 一一对应，并有测试保证不漂移。当前共 31 个工具。
 
 | MCP 工具 | 设计名 | 副作用 | CLI 等价 |
 | --- | --- | --- | --- |
@@ -85,6 +85,8 @@ env = { RCF_HOME = "C:/Users/you/.rcf" }
 | `compute_list_environments` | `compute.list_environments` | 无 | `rcf env list` |
 | `compute_inspect_environment` | `compute.inspect_environment` | 无；不执行验证命令 | `rcf env show` |
 | `compute_verify_environment` | `compute.verify_environment` | **有**：需本次 `confirm=true` 与 execute 权限 | `rcf env verify ENV --node NODE --yes` |
+| `compute_plan_environment` | `compute.plan_environment` | 无（只生成计划） | `rcf env plan ENV --node NODE` |
+| `compute_apply_environment` | `compute.apply_environment` | **有**：需 `confirm=true`；只写自己拥有的前缀（`managed_roots` 或 `managed=true`） | `rcf env apply ENV --node NODE --yes` |
 | `compute_list_projects` | `compute.list_projects` | 无 | `rcf project list` |
 | `compute_plan_run` | `compute.plan_run` | 无（只写一条计划记录） | `rcf run plan` |
 | `compute_submit_run` | `compute.submit_run` | **有**：提交作业、预约 GPU | `rcf run submit --yes` |
@@ -149,13 +151,18 @@ env = { RCF_HOME = "C:/Users/you/.rcf" }
 **不要**跳过 3、4 直接提交；`submit` 只接受 `plan_id`，不接受临时拼的命令行。
 这是刻意的：所有执行都必须先有一次可审阅的计划。
 
-两条与提交有关的硬规则：
+三条与提交有关的硬规则：
 
 - **plan 会过期**：默认 30 分钟（`[runs].plan_ttl_minutes`）。过期提交返回 `plan_expired`，
   正确反应是**重新 plan**，不要试图复用旧 plan——它描述的是 30 分钟前的机器。
 - **输入必须声明**：项目声明了 `inputs` 时，`compute_plan_run` 会逐个 pattern 在节点上展开。
   任一个匹配不到文件就是 `blocked`（`project_inputs`），此时不要提交，先确认数据是否同步。
   计划里 `inputs` 字段给出文件数、总字节和 digest，等同「这次运行读的是哪批数据」。
+- **状态有新鲜度**：`compute_get_run`/`compute_list_runs`（以及 `rcf run status/list --json`）
+  返回 `observed_age_seconds`、`stale` 和 `state_observed_at`。`state` 只代表最后一次**成功**探测
+  看到的状态；探测失败时 RCF 保留旧状态并记录 `error`。`stale: true` 表示该状态已超过
+  `[runs].stale_after_seconds`（默认 300 秒）没被确认，此时不要把它当实时状态，更不要据此
+  判断「还在跑」或「已经结束」。
 
 ### 4.2 存储治理的五条硬规则
 
@@ -192,7 +199,15 @@ Agent 先列出项目/节点，再用 `compute_plan_run` 的 `params={"seed":1,"
 rcf env show <env> --node <node>          # 看状态与指纹（compatible / missing / drifted）
 rcf env lock <env> --node <node>          # conda list --explicit 或 pip freeze，可据此重建
 rcf env lock <env> --node <node> --out lock.txt
+
+rcf env plan <env> --node <node>          # 缺包时生成安装计划（无副作用）
+rcf env apply <env> --node <node> --yes   # 执行审阅过的计划；只写自己拥有的前缀
 ```
+
+Agent 侧对应 `compute_plan_environment` → `compute_apply_environment(confirm=true)`。
+能不能写不取决于 `allow_environment_mutation`（那是旧字段，不参与判定），而取决于
+`[environments].managed_roots` 是否包含该路径、或该环境是否标了 `managed = true`；
+计划被拒时 `blockers` 会给出具体原因。
 
 `compute_get_run` 返回的 `env_fingerprint` 与 `git_commit` 一起，构成「这次结果是在哪份代码、
 哪套依赖下产生的」。要复现实验，先对齐这两个值。

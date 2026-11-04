@@ -1,12 +1,13 @@
 # 功能完成度与验收状态
 
-> 更新：2026-11-03。**当前工作树离线集成验收通过**，不是已上传/已发布版本。
-> 测试环境：Windows / Python 3.12.3；macOS arm64 / Python 3.12.16（真实 mac 节点）。
+> 更新：2026-11-04。**当前工作树离线集成验收通过**，不是已上传/已发布版本。
+> 测试环境：Windows / Python 3.12.3；macOS arm64 / Python 3.12.16（真实 macOS 节点）。
 > 原生 Linux 与远端 GitHub CI 未在本轮执行；macOS 已在真实节点复核。
 > 下表命令按本机 Windows 记录；其他平台把 `.venv/Scripts/python.exe` 换成
 > `.venv/bin/python`，或使用等价的 `uv run python`。
 
-**一句话结论**：当前工作树的离线回归通过；真实设备、跨平台 CI 与正式发布仍未声明。
+**一句话结论**：当前工作树的离线回归通过；真实设备已有私域运行样本，但公开版本仍不声明
+特定站点兼容性；跨平台 CI 与正式发布未声明。
 
 ## 1. 状态定义
 
@@ -26,6 +27,9 @@
 | Windows Task Scheduler | `executors/windows_task.py`、`test_windows_task_executor.py`、`test_windows_task_safety.py` | 登录会话、WSL、取消证据等设备行为待验收 |
 | CLI / MCP | `cli/main.py`、`mcp/server.py`、`test_cli_and_mcp.py` | 工具数量与入口以当前 `rcf mcp tools` 为准 |
 | 提交、租约与不确定状态 | `runs/`、`test_submission_safety.py`、`test_submission_preflight.py` | unknown 不等于失败；先恢复核查再考虑新计划 |
+| 观测语义（新鲜度、错误生命周期、ssh 诊断） | `runs/manager.py`、`runs/store.py`、`core/runner.py`、`test_observation_truthfulness.py` | 2026-11-04 新增：每次探测确认写 `state_observed_at`，`run list/status` 返回 `observed_age_seconds` 与 `stale`；成功探测清掉旧 `error` 并记 `observe_recovered`；`get_run`/`run status` 顶层暴露最近一条 `diagnosis`；ssh 255 的 detail 保留 stderr；旧库中 `succeeded` 行的陈旧观测错误一次性清除 |
+| 产物契约语义 | `runs/manager.py`、`test_planner_and_manager.py` | `command_override` 的 run 不再误报 `contract_violation`，改记 `output_contract_unchecked`；`output_contract=none` 记 `output_contract_unmanaged`；真正的空产物仍标记违规 |
+| 复现元数据传递 | `runs/manager.py`、`test_conventions.py`、`test_planner_and_manager.py` | plan 的 git/inputs 完整写入 run；新增 inputs 摘要传递契约测试；未声明 inputs 或非 git 项目保持 warn，不伪造字段 |
 | 代码同步与内容校验 | `projects/push.py`、`test_push_integrity.py` | 不宣称消除恶意共享目录并发 TOCTOU |
 | 结果回收与存储治理 | `runs/fetch.py`、`storage/`、`test_storage_*.py` | 有界扫描/归属/指纹/守卫；不可当通用备份或垃圾回收器 |
 | 进度、ETA、试跑、预算 | `progress/`、`test_progress_*.py`、`test_pilot_*.py` | reporter 是项目证据，不保证工作量或 ETA 真实性/精确性 |
@@ -36,19 +40,19 @@
 
 修复涵盖清理副本/真实归属/声明输入、路径链接写入、取消身份、环境权限与路径、试跑后代、
 工作量校准与心跳速率、参数保留名、Windows shell 与 Runner 超时；独立复核追加的同 SSH endpoint
-别名与原地 reparse 写入也已补回归。当前 MCP 工具数为 29，校准证据版本为 2。
+别名与原地 reparse 写入也已补回归。当前 MCP 工具数为 31，校准证据版本为 2。
 
 | 项目 | 命令/证据 | 结果 |
 | --- | --- | --- |
-| 离线全套（Windows） | `uv run --frozen --offline pytest -m "not integration" -o addopts="--strict-markers" -q -p no:cacheprovider` | **1027 passed / 10 skipped**，357.70 秒 |
+| 离线全套（Windows） | `uv run --frozen --offline pytest -m "not integration" -o addopts="--strict-markers" -q -p no:cacheprovider` | **1042 passed / 10 skipped**，375.51 秒（2026-11-04） |
 | 离线全套（macOS arm64） | `.venv/bin/python -m pytest -m "not integration" -o addopts="--strict-markers" -q -p no:cacheprovider` | **994 passed / 43 skipped**，114.78 秒 |
 | 公开材料扫描 | `uv run --frozen --offline python tools/publication_check.py --source . --include-code` | **通过，0 findings**；启发式，不扫描历史 |
 | 源码/测试扫描 | 覆盖 src/tests/tools，合成安全测试使用运行时构造数据 | **通过，0 findings** |
 | 外部可用示例 | `uv run --frozen --offline python examples/quickstart.py` | **通过**；临时独立 home、本机 CPU 作业，确定性结果核对成功 |
 | Ruff | `uv run --frozen --offline ruff check --no-respect-gitignore src tests tools` | **通过** |
-| 离线候选构建 | `uv run --frozen --offline python tools/release_check.py --source . --output .tmp/release-candidate-*` | **通过**；源码清单、wheel/sdist、隔离安装与 29 工具验证；evidence.json 留在本机，不纳入公开源码 |
+| 离线候选构建 | `uv run --frozen --offline python tools/release_check.py --source . --output .tmp/release-candidate-*` | **通过**；源码清单、wheel/sdist、隔离安装与 31 工具验证；evidence.json 留在本机，不纳入公开源码 |
 | 三平台 CI | Windows/Linux/macOS × Python 3.11/3.12 workflow | 已配置不等于已执行；远端结果未声明 |
-| 真实设备 | 独立授权、脱敏记录、准确版本与限制 | 本次公开候选不声明通过 |
+| 真实设备 | 私域多节点运行样本（Slurm / SSH / WSL / macOS） | 已有运行证据；公开版本不声明特定站点兼容性；取消、存储清理、进度校准仍待真机验收 |
 
 Windows Bash 用例通过 `tests/bash_support.py` 选择 Git Bash；缺少平台能力的 skip 必须保留
 具体原因。测试禁止连接真实服务器，不为通过而放宽断言，不安装依赖、不清空用户工作树。
@@ -72,4 +76,4 @@ Windows Bash 用例通过 `tests/bash_support.py` 选择 Git Bash；缺少平台
 - 任何站点特定软件版本、性能数字、科研数值结果或 CUDA 计算正确性。
 
 进一步边界见 [security.md](security.md)，后续验证建议见 [roadmap.md](roadmap.md)。
-本轮没有提交或上传；真实设备验证仍需单独授权。
+本轮没有上传或发布；真实设备验证仍需单独授权，且不把私域运行样本等同于公开兼容性声明。

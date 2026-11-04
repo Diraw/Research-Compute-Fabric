@@ -39,7 +39,7 @@ RCF 把这些答案放进同一条链路：**plan → review → submit → obse
 | 代码与数据 | `project sync` / `project push`，按内容差异传输并逐文件校验 |
 | 存储治理 | 台账、扫描、两阶段清理；删除必须审阅具体文件清单并再次确认 |
 | 进度与预算 | 项目写入 JSONL 证据；ETA 只来自实测推进，没有证据就返回不可估 |
-| Agent 接入 | 29 个 MCP 工具；CLI 与 MCP 共用 `RcfService` 和同一套错误码 |
+| Agent 接入 | 31 个 MCP 工具；CLI 与 MCP 共用 `RcfService` 和同一套错误码 |
 
 ## 安装
 
@@ -127,7 +127,7 @@ rcf node selftest NODE   # 约 10 秒，只验证控制路径与目录，不提�
 
 ## 接入 Agent（MCP）
 
-`rcf mcp serve`（等价 `rcf-mcp`）启动 stdio MCP server。当前暴露 29 个工具，覆盖节点探测、
+`rcf mcp serve`（等价 `rcf-mcp`）启动 stdio MCP server。当前暴露 31 个工具，覆盖节点探测、
 计划/提交/状态/日志、环境、项目同步、结果回收、存储治理和进度/ETA。
 
 Claude Code 或其他兼容 stdio 的客户端示例：

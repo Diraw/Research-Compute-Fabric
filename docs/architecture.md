@@ -6,7 +6,7 @@ Agent 工作循环见 [Agent 接入指南](agent-guide.md)；验证范围见 [�
 ## 0. 当前关键契约
 
 - CLI/MCP 共用的 `inspect_environment` 只探测；任意 `verify_command` 由独立 execute 入口
-  `verify_environment(confirm=true)` 执行并审计。当前 MCP 共 29 个工具，清单以 `TOOL_SPECS` 为准。
+  `verify_environment(confirm=true)` 执行并审计。当前 MCP 共 31 个工具，清单以 `TOOL_SPECS` 为准。
 - 内部模板值为保留名，`RunRequest.params` 与规划组装双重拒绝覆盖；环境变更除词法所有权外还需
   目标端祖先路径证据，不能通过 symlink/junction 或未知存在性越界。
 - local 节点与 controller 共享物理 guard identity；同 SSH 连接配置也共享 endpoint identity；
