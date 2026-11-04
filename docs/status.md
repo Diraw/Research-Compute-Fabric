@@ -34,6 +34,7 @@
 | 结果回收与存储治理 | `runs/fetch.py`、`storage/`、`test_storage_*.py` | 有界扫描/归属/指纹/守卫；不可当通用备份或垃圾回收器 |
 | 进度、ETA、试跑、预算 | `progress/`、`test_progress_*.py`、`test_pilot_*.py` | reporter 是项目证据，不保证工作量或 ETA 真实性/精确性 |
 | 源码交付与构建 | `test_delivery.py`、`test_release_check.py`、`tools/release_check.py` | 离线预检已通过，最终候选以 evidence.json 为准 |
+| 真实路径集成（opt-in） | `tests/integration/`、`test_readonly_smoke.py`、`test_local_submit.py`、`test_remote_submit.py` | 默认 skip；2026-11-04 只读 smoke 已在两个真实节点通过，隔离 home 的真实本机 60 秒全链路通过；远端提交/cancel 模板已就绪，待授权执行 |
 | 公开材料隐私 | `tools/publication_check.py`、`test_publication_hygiene.py` | 启发式，不扫描 Git 历史，不证明无秘密 |
 
 ## 3. 最终验收记录
@@ -50,6 +51,7 @@
 | 源码/测试扫描 | 覆盖 src/tests/tools，合成安全测试使用运行时构造数据 | **通过，0 findings** |
 | 外部可用示例 | `uv run --frozen --offline python examples/quickstart.py` | **通过**；临时独立 home、本机 CPU 作业，确定性结果核对成功 |
 | Ruff | `uv run --frozen --offline ruff check --no-respect-gitignore src tests tools` | **通过** |
+| 真实路径集成（2026-11-04） | `RCF_IT=1 ... pytest tests/integration/test_readonly_smoke.py`；`RCF_IT=1 RCF_IT_JOB_SECONDS=60 ... test_local_submit.py` | **通过**；只读 smoke 覆盖两个真实节点；本机 60 秒 plan → submit → observe → results → fetch 全链路通过；远端提交/cancel 默认 skip |
 | 离线候选构建 | `uv run --frozen --offline python tools/release_check.py --source . --output .tmp/release-candidate-*` | **通过**；源码清单、wheel/sdist、隔离安装与 31 工具验证；evidence.json 留在本机，不纳入公开源码 |
 | 三平台 CI | Windows/Linux/macOS × Python 3.11/3.12 workflow | 已配置不等于已执行；远端结果未声明 |
 | 真实设备 | 私域多节点运行样本（Slurm / SSH / WSL / macOS） | 已有运行证据；公开版本不声明特定站点兼容性；取消、存储清理、进度校准仍待真机验收 |

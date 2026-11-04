@@ -34,6 +34,9 @@
 目标：把手工跑过的真实路径固化成可重复的套件。没有这一层，任何重构都可能悄悄破坏
 5 个异构节点的真实链路。
 
+2026-11-04：`tests/integration/` 骨架已落地（默认 skip，`RCF_IT=1` 才启用）；只读 smoke
+与隔离 home 的 60 秒本机全链路已通过；远端提交/cancel 模板已写好，默认 skip，待显式授权执行。
+
 | 事项 | 产出 | 依赖 |
 | --- | --- | --- |
 | integration 骨架 | `tests/integration/` + `-m integration` + 环境变量 gate，默认 skip | 无 |
