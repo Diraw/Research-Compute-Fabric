@@ -187,6 +187,24 @@ def test_failed_probe_keeps_the_last_known_state_and_the_reason(service, monkeyp
     assert payload["stale"] is True  # the claim just got older, and it says so
 
 
+def test_list_runs_includes_the_latest_diagnosis(service):
+    save_run(service, run_id="run_failed", state=RunState.FAILED, age=timedelta(seconds=5))
+    save_run(service, run_id="run_clean", state=RunState.SUCCEEDED, age=timedelta(seconds=5))
+    service.store.add_event(
+        RunEvent(
+            run_id="run_failed",
+            at=now_utc(),
+            kind="diagnosis",
+            message="exit 127: interpreter or command not found",
+        )
+    )
+
+    rows = {row["run_id"]: row for row in service.list_runs()}
+
+    assert rows["run_failed"]["diagnosis"]["message"].startswith("exit 127")
+    assert rows["run_clean"]["diagnosis"] is None
+
+
 def test_get_run_lifts_the_latest_diagnosis_to_the_top_level(service):
     save_run(service, state=RunState.FAILED, age=timedelta(seconds=5))
     assert service.get_run("run_observed", refresh=False)["diagnosis"] is None

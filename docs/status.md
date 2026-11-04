@@ -27,7 +27,7 @@
 | Windows Task Scheduler | `executors/windows_task.py`、`test_windows_task_executor.py`、`test_windows_task_safety.py` | 登录会话、WSL、取消证据等设备行为待验收 |
 | CLI / MCP | `cli/main.py`、`mcp/server.py`、`test_cli_and_mcp.py` | 工具数量与入口以当前 `rcf mcp tools` 为准 |
 | 提交、租约与不确定状态 | `runs/`、`test_submission_safety.py`、`test_submission_preflight.py` | unknown 不等于失败；先恢复核查再考虑新计划 |
-| 观测语义（新鲜度、错误生命周期、ssh 诊断） | `runs/manager.py`、`runs/store.py`、`core/runner.py`、`test_observation_truthfulness.py` | 2026-11-04 新增：每次探测确认写 `state_observed_at`，`run list/status` 返回 `observed_age_seconds` 与 `stale`；成功探测清掉旧 `error` 并记 `observe_recovered`；`get_run`/`run status` 顶层暴露最近一条 `diagnosis`；ssh 255 的 detail 保留 stderr；旧库中 `succeeded` 行的陈旧观测错误一次性清除 |
+| 观测语义（新鲜度、错误生命周期、ssh 诊断） | `runs/manager.py`、`runs/store.py`、`core/runner.py`、`test_observation_truthfulness.py` | 2026-11-04 新增：每次探测确认写 `state_observed_at`，`run list/status` 返回 `observed_age_seconds` 与 `stale`；成功探测清掉旧 `error` 并记 `observe_recovered`；`get_run`/`run status` 顶层暴露最近一条 `diagnosis`，`run list` 也批量返回（单次 SQL，无 N+1）；ssh 255 的 detail 保留 stderr；旧库中 `succeeded` 行的陈旧观测错误一次性清除 |
 | 产物契约语义 | `runs/manager.py`、`test_planner_and_manager.py` | `command_override` 的 run 不再误报 `contract_violation`，改记 `output_contract_unchecked`；`output_contract=none` 记 `output_contract_unmanaged`；真正的空产物仍标记违规 |
 | 复现元数据传递 | `runs/manager.py`、`test_conventions.py`、`test_planner_and_manager.py` | plan 的 git/inputs 完整写入 run；新增 inputs 摘要传递契约测试；未声明 inputs 或非 git 项目保持 warn，不伪造字段 |
 | 代码同步与内容校验 | `projects/push.py`、`test_push_integrity.py` | 不宣称消除恶意共享目录并发 TOCTOU |
@@ -45,7 +45,7 @@
 
 | 项目 | 命令/证据 | 结果 |
 | --- | --- | --- |
-| 离线全套（Windows） | `uv run --frozen --offline pytest -m "not integration" -o addopts="--strict-markers" -q -p no:cacheprovider` | **1049 passed / 10 skipped**，343.04 秒（2026-11-04） |
+| 离线全套（Windows） | `uv run --frozen --offline pytest -m "not integration" -o addopts="--strict-markers" -q -p no:cacheprovider` | **1050 passed / 10 skipped**，335.95 秒（2026-11-04） |
 | 离线全套（macOS arm64） | `.venv/bin/python -m pytest -m "not integration" -o addopts="--strict-markers" -q -p no:cacheprovider` | **994 passed / 43 skipped**，114.78 秒 |
 | 公开材料扫描 | `uv run --frozen --offline python tools/publication_check.py --source . --include-code` | **通过，0 findings**；启发式，不扫描历史 |
 | 源码/测试扫描 | 覆盖 src/tests/tools，合成安全测试使用运行时构造数据 | **通过，0 findings** |

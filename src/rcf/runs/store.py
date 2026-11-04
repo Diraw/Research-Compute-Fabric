@@ -373,6 +373,35 @@ class Store:
             )
             self._conn.commit()
 
+    def latest_events(self, run_ids: list[str], kind: str) -> dict[str, RunEvent]:
+        """Return the newest event of ``kind`` per run in one query.
+
+        ``list`` surfaces a diagnosis for many runs at once; one query per run
+        would turn a dashboard refresh into an N+1 problem.
+        """
+
+        ids = list(dict.fromkeys(run_ids))
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _ in ids)
+        rows = self._all(
+            f"SELECT * FROM run_events WHERE run_id IN ({placeholders}) AND kind = ? ORDER BY id DESC",
+            (*ids, kind),
+        )
+        latest: dict[str, RunEvent] = {}
+        for row in rows:
+            latest.setdefault(
+                row["run_id"],
+                RunEvent(
+                    run_id=row["run_id"],
+                    at=parse_iso(row["at"]) or now_utc(),
+                    kind=row["kind"],
+                    message=row["message"],
+                    data=json.loads(row["data_json"] or "{}"),
+                ),
+            )
+        return latest
+
     def list_events(self, run_id: str, *, limit: int = 100) -> list[RunEvent]:
         rows = self._all(
             "SELECT * FROM run_events WHERE run_id = ? ORDER BY id ASC LIMIT ?", (run_id, limit)

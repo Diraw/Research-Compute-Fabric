@@ -551,7 +551,15 @@ class RcfService:
 
     def list_runs(self, *, limit: int = 20, state: str | None = None) -> list[dict[str, Any]]:
         parsed = RunState(state) if state else None
-        return [self._run_payload(r) for r in self.runs.list(limit=limit, state=parsed)]
+        records = self.runs.list(limit=limit, state=parsed)
+        payloads = [self._run_payload(record) for record in records]
+        diagnoses = self.store.latest_events([record.run_id for record in records], "diagnosis")
+        for payload in payloads:
+            event = diagnoses.get(payload["run_id"])
+            payload["diagnosis"] = (
+                self._latest_diagnosis([event.model_dump(mode="json")]) if event else None
+            )
+        return payloads
 
     def get_logs(self, run_id: str, *, tail: int = 200) -> dict[str, Any]:
         text = self.runs.logs(run_id, tail=tail)
