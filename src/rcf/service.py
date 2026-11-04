@@ -633,6 +633,30 @@ class RcfService:
             f"{len(self.config.projects)} project(s) declared",
             warn_only=True,
         )
+        local_paths: list[str] = []
+        missing_paths: list[str] = []
+        for project in self.config.projects.values():
+            for node in self.config.nodes.values():
+                if node.kind is not NodeKind.LOCAL:
+                    continue
+                path = project.path_for(node.id)
+                if not path:
+                    continue
+                resolved = Path(path).expanduser()
+                local_paths.append(str(resolved))
+                if not resolved.exists():
+                    missing_paths.append(f"{project.id}@{node.id}: {resolved}")
+        checks.append(
+            {
+                "name": "project_paths",
+                "status": "warn" if missing_paths else "ok",
+                "detail": (
+                    "missing local project path(s): " + "; ".join(missing_paths[:5])
+                    if missing_paths
+                    else f"{len(local_paths)} local project path(s) exist"
+                ),
+            }
+        )
         add(
             "environments",
             bool(self.config.environments),

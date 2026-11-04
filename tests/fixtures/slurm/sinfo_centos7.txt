@@ -1,0 +1,5 @@
+debug*|up|10/8/0/18|64|257437+|(null)|infinite|node[1-18]
+normal|up|9/0/0/9|64|257437+|(null)|infinite|node[1-9]
+operation|up|10/8/0/18|64|257437+|(null)|infinite|node[1-18]
+gpu|up|0/2/0/2|32|257440|gpu:NVIDIAGeForceRTX3090:8|infinite|gpu[1-2]
+temp|up|8/0/0/8|64|257437+|(null)|infinite|node[1-8]

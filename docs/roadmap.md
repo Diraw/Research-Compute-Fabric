@@ -36,6 +36,8 @@
 
 2026-11-04：`tests/integration/` 骨架已落地（默认 skip，`RCF_IT=1` 才启用）；只读 smoke
 与隔离 home 的 60 秒本机全链路已通过；远端提交/cancel 模板已写好，默认 skip，待显式授权执行。
+真实 `sinfo`/`sacct` 输出已脱敏入夹具，并据此把 `%F` 可用节点改为按 idle 计算；`squeue` 空样本
+待有作业时采集。
 
 | 事项 | 产出 | 依赖 |
 | --- | --- | --- |
@@ -43,7 +45,7 @@
 | 节点 smoke | 每个授权节点：selftest → env inspect → plan → 60 秒作业 → status → logs → manifest | 授权节点 |
 | Slurm GPU 计算 | 在 Slurm `gpu` 分区跑一次真实 `--gres=gpu:1` 计算作业（不是 probe） | 账户 + 允许提交 |
 | 真实取消 | 真机 `cancel`，核对 `scancel` 回执、终态证据与租约释放 | 授权节点 |
-| 真实调度器夹具 | 脱敏保存 `sinfo/squeue/sacct` 输出，替换 `fake_slurm` 中与站点不符的字段 | 上两项 |
+| 真实调度器夹具 | `sinfo`/`sacct` 已脱敏入夹具并修正 `%F` 可用节点语义；`squeue` 待有作业时采集 | 上两项 |
 | 长作业/断线 | ≥30–60 分钟作业、排队、断开重连、`unknown` → 真实状态转换 | 授权节点 |
 | 分区上限 | 计划阶段比对 `MaxTime`（处理 `infinite`）与分区容量 | 真实 `sinfo` |
 | 连接复用 | 可选 `ControlMaster`/`ControlPersist`，默认关闭，显式开启 | 无 |

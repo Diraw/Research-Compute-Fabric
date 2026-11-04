@@ -264,6 +264,23 @@ def test_doctor_marks_the_legacy_flag_as_not_a_gate(service):
     assert "not a gate" in check["detail"]
 
 
+def test_doctor_warns_when_a_local_project_path_is_missing(tmp_path):
+    missing = str(tmp_path / "missing-project").replace("\\", "/")
+    home = make_home(
+        tmp_path,
+        nodes='[nodes.test]\nkind = "local"\n',
+        projects=f'[projects.demo]\nentrypoint = "true"\npaths = {{ "test" = "{missing}" }}\n',
+    )
+    svc = RcfService(Config.load(home), actor="test")
+    try:
+        report = svc.doctor()
+        check = next(c for c in report["checks"] if c["name"] == "project_paths")
+        assert check["status"] == "warn"
+        assert "missing-project" in check["detail"]
+    finally:
+        svc.close()
+
+
 # -- 5. MCP surface reaches environment installs --------------------------- #
 
 

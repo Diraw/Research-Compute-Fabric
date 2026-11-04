@@ -220,13 +220,18 @@ _SLURM_STATE_ALIASES = {
 }
 
 
-def _partition_nodes(field: str) -> tuple[int | None, int | None]:
-    """``4/12/0/16`` → (allocated=4, total=16); unknown → (None, None)."""
+def _partition_nodes(field: str) -> tuple[int | None, int | None, int | None]:
+    """``4/12/0/16`` → (allocated=4, idle=12, total=16).
+
+    Slurm's ``%F`` is ``allocated/idle/other/total``.  ``other`` nodes are not
+    schedulable, so availability must use ``idle`` rather than
+    ``total - allocated`` (which would count ``other`` as free).
+    """
 
     match = re.fullmatch(r"(\d+)/(\d+)/(\d+)/(\d+)", field.strip())
     if not match:
-        return None, None
-    return int(match.group(1)), int(match.group(4))
+        return None, None, None
+    return int(match.group(1)), int(match.group(2)), int(match.group(4))
 
 
 def parse_sinfo(text: str) -> list[SlurmPartition]:
@@ -239,12 +244,12 @@ def parse_sinfo(text: str) -> list[SlurmPartition]:
         if len(parts) < 7:
             continue
         name = parts[0].rstrip("*").strip()
-        allocated, total = _partition_nodes(parts[2])
+        _allocated, idle, total = _partition_nodes(parts[2])
         partitions.append(
             SlurmPartition(
                 name=name,
                 state=parts[1] or None,
-                avl_nodes=(total - allocated) if total is not None and allocated is not None else None,
+                avl_nodes=idle,
                 total_nodes=total,
                 cpus=_int(parts[3]),
                 memory_mb=_int(parts[4]),

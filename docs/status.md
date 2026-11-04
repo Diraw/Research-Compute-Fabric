@@ -20,8 +20,8 @@
 
 | 能力 | 实现/测试入口 | 当前声明边界 |
 | --- | --- | --- |
-| 配置、交叉引用与安全策略 | `core/config.py`、`core/models.py`、`test_config_and_models.py`、`test_security.py` | 本轮离线回归通过；真实配置/节点仍需独立验证 |
-| 资源探测与 Slurm 解析 | `resources/`、`test_parsers.py`、`test_status_probe.py` | 夹具与离线模拟不能覆盖所有站点输出 |
+| 配置、交叉引用与安全策略 | `core/config.py`、`core/models.py`、`test_config_and_models.py`、`test_security.py` | 本轮离线回归通过；`doctor` 新增本地项目路径存在性检查，会话目录被清理后能立即暴露 |
+| 资源探测与 Slurm 解析 | `resources/`、`test_parsers.py`、`test_status_probe.py`、`test_real_slurm_outputs.py` | 已加入真实 CentOS 7 / Slurm 20.11 的 `sinfo`/`sacct` 夹具（脱敏）；`%F` 可用节点改按 idle 计算；`squeue` 空样本待有作业时采集 |
 | 本机任务生命周期 | `executors/local_exec.py`、`test_local_workflow.py` | 真实本机子进程，不等于远程验收 |
 | SSH / Slurm 执行器 | `executors/ssh_exec.py`、`executors/slurm_exec.py`、`test_ssh_slurm_workflow.py` | 假主机/调度器 + 真 Bash；真实权限/配额待授权测试 |
 | Windows Task Scheduler | `executors/windows_task.py`、`test_windows_task_executor.py`、`test_windows_task_safety.py` | 登录会话、WSL、取消证据等设备行为待验收 |
@@ -45,13 +45,14 @@
 
 | 项目 | 命令/证据 | 结果 |
 | --- | --- | --- |
-| 离线全套（Windows） | `uv run --frozen --offline pytest -m "not integration" -o addopts="--strict-markers" -q -p no:cacheprovider` | **1042 passed / 10 skipped**，375.51 秒（2026-11-04） |
+| 离线全套（Windows） | `uv run --frozen --offline pytest -m "not integration" -o addopts="--strict-markers" -q -p no:cacheprovider` | **1049 passed / 10 skipped**，343.04 秒（2026-11-04） |
 | 离线全套（macOS arm64） | `.venv/bin/python -m pytest -m "not integration" -o addopts="--strict-markers" -q -p no:cacheprovider` | **994 passed / 43 skipped**，114.78 秒 |
 | 公开材料扫描 | `uv run --frozen --offline python tools/publication_check.py --source . --include-code` | **通过，0 findings**；启发式，不扫描历史 |
 | 源码/测试扫描 | 覆盖 src/tests/tools，合成安全测试使用运行时构造数据 | **通过，0 findings** |
 | 外部可用示例 | `uv run --frozen --offline python examples/quickstart.py` | **通过**；临时独立 home、本机 CPU 作业，确定性结果核对成功 |
 | Ruff | `uv run --frozen --offline ruff check --no-respect-gitignore src tests tools` | **通过** |
 | 真实路径集成（2026-11-04） | `RCF_IT=1 ... pytest tests/integration/test_readonly_smoke.py`；`RCF_IT=1 RCF_IT_JOB_SECONDS=60 ... test_local_submit.py` | **通过**；只读 smoke 覆盖两个真实节点；本机 60 秒 plan → submit → observe → results → fetch 全链路通过；远端提交/cancel 默认 skip |
+| 真实 Slurm 夹具（2026-11-04） | `tests/fixtures/slurm/`、`test_real_slurm_outputs.py` | **通过**；真实 `sinfo` 的 `%F`/`+` 内存后缀/`(null)`/`infinite` 与 `sacct` 的 `.batch`/`.extern` 行均被覆盖 |
 | 离线候选构建 | `uv run --frozen --offline python tools/release_check.py --source . --output .tmp/release-candidate-*` | **通过**；源码清单、wheel/sdist、隔离安装与 31 工具验证；evidence.json 留在本机，不纳入公开源码 |
 | 三平台 CI | Windows/Linux/macOS × Python 3.11/3.12 workflow | 已配置不等于已执行；远端结果未声明 |
 | 真实设备 | 私域多节点运行样本（Slurm / SSH / WSL / macOS） | 已有运行证据；公开版本不声明特定站点兼容性；取消、存储清理、进度校准仍待真机验收 |
