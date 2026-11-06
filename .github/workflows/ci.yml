@@ -33,7 +33,17 @@ jobs:
       - name: Prepare build backend
         run: uv pip install --python .venv hatchling
       - name: Unit and simulated-host tests (never real integrations)
-        run: uv run --frozen --offline pytest -m "not integration"
+        run: >
+          uv run --frozen --offline pytest -m "not integration" -n auto
+          --ignore=tests/e2e/test_pilot_workflow.py
+          --ignore=tests/unit/test_runner.py
+      # These assert sub-second process deadlines.  Run them alone so parallel
+      # CPU contention cannot delay interpreter startup past the deadline;
+      # that would test the runner, not the timeout being verified.
+      - name: Wall-clock-sensitive timeout tests (serial)
+        run: >
+          uv run --frozen --offline pytest
+          tests/e2e/test_pilot_workflow.py tests/unit/test_runner.py
       - name: Ruff
         run: uv run --frozen --offline ruff check --no-respect-gitignore src tests tools
       - name: Publication privacy checks (current public tree only)

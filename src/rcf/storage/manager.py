@@ -372,7 +372,12 @@ class StorageManager:
             actual = {**actual, "owner_id": owner["owner_id"], "owner_kind": owner["kind"],
                       "reason": kind, "run_id": run_id}
             if kind == "replica":
-                copy = self._verified_copy(project_id, node_id, root, actual, run_id=run_id)
+                # A retained copy belongs to the run that produced the file, not
+                # to the run whose directory is being cleaned.  Keying on the
+                # requested run_id made every second run's replica permanently
+                # unprovable even when a verified copy of identical content
+                # existed.
+                copy = self._verified_copy(project_id, node_id, root, actual, run_id=owner["owner_id"])
                 if copy is None:
                     plan["blocked"].append({"path": actual["path"], "reasons": ["no live verified retained copy"]})
                     continue

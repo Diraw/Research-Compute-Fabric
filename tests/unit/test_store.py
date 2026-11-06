@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import stat
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from threading import Barrier
@@ -160,3 +162,8 @@ def test_environment_verification_is_recorded(store):
     store.record_verification(env_id="e", node_id="n", fingerprint="fp", detail={"ok": True})
     assert store.get_verification(env_id="e", node_id="n", fingerprint="fp") is not None
     assert store.get_verification(env_id="e", node_id="n", fingerprint="other") is None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows ACLs do not use POSIX mode bits")
+def test_state_database_is_private(store):
+    assert stat.S_IMODE(store.path.stat().st_mode) == 0o600

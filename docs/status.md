@@ -1,8 +1,9 @@
 # 功能完成度与验收状态
 
-> 更新：2026-11-04。**当前工作树离线集成验收通过**，不是已上传/已发布版本。
-> 测试环境：Windows / Python 3.12.3；macOS arm64 / Python 3.12.16（真实 macOS 节点）。
-> 原生 Linux 与远端 GitHub CI 未在本轮执行；macOS 已在真实节点复核。
+> 更新：2026-11-06。**当前工作树离线集成验收通过**，不是已上传/已发布版本。
+> 测试环境：Windows / Python 3.11.14（2026-11-06）；macOS arm64 / Python 3.12.16
+> 是 2026-11-04 的真实节点记录，本轮改动未在 macOS 复跑。
+> 原生 Linux 与远端 GitHub CI 未在本轮执行。
 > 下表命令按本机 Windows 记录；其他平台把 `.venv/Scripts/python.exe` 换成
 > `.venv/bin/python`，或使用等价的 `uv run python`。
 
@@ -31,7 +32,7 @@
 | 产物契约语义 | `runs/manager.py`、`test_planner_and_manager.py` | `command_override` 的 run 不再误报 `contract_violation`，改记 `output_contract_unchecked`；`output_contract=none` 记 `output_contract_unmanaged`；真正的空产物仍标记违规 |
 | 复现元数据传递 | `runs/manager.py`、`test_conventions.py`、`test_planner_and_manager.py` | plan 的 git/inputs 完整写入 run；新增 inputs 摘要传递契约测试；未声明 inputs 或非 git 项目保持 warn，不伪造字段 |
 | 代码同步与内容校验 | `projects/push.py`、`test_push_integrity.py` | 不宣称消除恶意共享目录并发 TOCTOU |
-| 结果回收与存储治理 | `runs/fetch.py`、`storage/`、`test_storage_*.py` | 有界扫描/归属/指纹/守卫；不可当通用备份或垃圾回收器 |
+| 结果回收与存储治理 | `runs/fetch.py`、`storage/`、`test_storage_*.py` | 有界扫描/归属/指纹/守卫；fetch 目标不得与其他 run 的 result/work/run 目录重叠（同物理节点，含本地别名与 macOS 大小写）；保留副本按登记归属验证；不可当通用备份或垃圾回收器 |
 | 进度、ETA、试跑、预算 | `progress/`、`test_progress_*.py`、`test_pilot_*.py` | reporter 是项目证据，不保证工作量或 ETA 真实性/精确性 |
 | 源码交付与构建 | `test_delivery.py`、`test_release_check.py`、`tools/release_check.py` | 离线预检已通过，最终候选以 evidence.json 为准 |
 | 真实路径集成（opt-in） | `tests/integration/`、`test_readonly_smoke.py`、`test_local_submit.py`、`test_remote_submit.py` | 默认 skip；2026-11-04 只读 smoke 已在两个真实节点通过，隔离 home 的真实本机 60 秒全链路通过；远端提交/cancel 模板已就绪，待授权执行 |
@@ -41,12 +42,14 @@
 
 修复涵盖清理副本/真实归属/声明输入、路径链接写入、取消身份、环境权限与路径、试跑后代、
 工作量校准与心跳速率、参数保留名、Windows shell 与 Runner 超时；独立复核追加的同 SSH endpoint
-别名与原地 reparse 写入也已补回归。当前 MCP 工具数为 31，校准证据版本为 2。
+别名与原地 reparse 写入也已补回归。2026-11-06 追加 fetch 目标守卫、副本归属证据与 POSIX
+私有权限；Windows 离线回归重新通过，macOS/Linux 未复跑。当前 MCP 工具数为 31，校准证据版本为 2。
 
 | 项目 | 命令/证据 | 结果 |
 | --- | --- | --- |
-| 离线全套（Windows） | `uv run --frozen --offline pytest -m "not integration" -o addopts="--strict-markers" -q -p no:cacheprovider` | **1050 passed / 10 skipped**，335.95 秒（2026-11-04） |
-| 离线全套（macOS arm64） | `.venv/bin/python -m pytest -m "not integration" -o addopts="--strict-markers" -q -p no:cacheprovider` | **994 passed / 43 skipped**，114.78 秒 |
+| 离线全套（Windows） | `uv run --frozen --offline pytest -m "not integration" -n auto --ignore=tests/e2e/test_pilot_workflow.py --ignore=tests/unit/test_runner.py`；`uv run --frozen --offline pytest tests/e2e/test_pilot_workflow.py tests/unit/test_runner.py` | **1034 passed / 12 skipped**，85.56 秒 + **22 passed**，44.72 秒（2026-11-06，Python 3.11.14） |
+| 离线全套（macOS arm64） | `.venv/bin/python -m pytest -m "not integration" -o addopts="--strict-markers" -q -p no:cacheprovider` | **994 passed / 43 skipped**，114.78 秒（2026-11-04 记录；本轮未复跑） |
+| POSIX 私有权限（WSL Ubuntu 24.04） | `PYTHONPATH=src pytest -q tests/unit/test_store.py::test_state_database_is_private tests/unit/test_config_and_models.py::test_starter_home_is_private` | **2 passed**（2026-11-06，Python 3.12.3）；只覆盖两个权限断言，不是 Linux 全套 |
 | 公开材料扫描 | `uv run --frozen --offline python tools/publication_check.py --source . --include-code` | **通过，0 findings**；启发式，不扫描历史 |
 | 源码/测试扫描 | 覆盖 src/tests/tools，合成安全测试使用运行时构造数据 | **通过，0 findings** |
 | 外部可用示例 | `uv run --frozen --offline python examples/quickstart.py` | **通过**；临时独立 home、本机 CPU 作业，确定性结果核对成功 |
@@ -59,6 +62,9 @@
 
 Windows Bash 用例通过 `tests/bash_support.py` 选择 Git Bash；缺少平台能力的 skip 必须保留
 具体原因。测试禁止连接真实服务器，不为通过而放宽断言，不安装依赖、不清空用户工作树。
+2026-11-06 的改动只在 Windows 复跑；macOS/Linux 行保留 11-04 证据，不代表本轮代码。
+`test_pilot_workflow.py` 与 `test_runner.py` 断言亚秒/5 秒墙钟终止，CI 将它们单独串行
+执行，避免并行竞争把解释器启动延迟误判成看门狗或超时逻辑失败。
 
 ## 4. 通用技术经验与验证边界
 

@@ -351,8 +351,12 @@ class Config:
         ]
 
     def ensure_dirs(self) -> None:
-        (self.home / "state").mkdir(parents=True, exist_ok=True)
-        (self.home / "logs").mkdir(parents=True, exist_ok=True)
+        # Do not chmod a home the user pointed us at; only the RCF-owned
+        # subdirectories are restricted.
+        for name in ("state", "logs"):
+            path = self.home / name
+            path.mkdir(parents=True, exist_ok=True)
+            _restrict(path, 0o700)
 
 
 def _validate_cross_references(
@@ -455,11 +459,24 @@ STARTER_ENVIRONMENTS_TOML = """\
 """
 
 
+def _restrict(path: Path, mode: int) -> None:
+    """Best-effort private mode on POSIX; Windows ACLs ignore these bits."""
+
+    if os.name == "nt":
+        return
+    try:
+        path.chmod(mode)
+    except OSError:
+        pass
+
+
 def write_starter_home(home: Path, *, overwrite: bool = False) -> list[Path]:
     """Create a commented starter layout; never overwrites unless asked."""
 
     home.mkdir(parents=True, exist_ok=True)
+    _restrict(home, 0o700)
     (home / "state").mkdir(exist_ok=True)
+    _restrict(home / "state", 0o700)
     created: list[Path] = []
     for name, content in (
         (SETTINGS_FILE, STARTER_RCF_TOML),
@@ -471,6 +488,8 @@ def write_starter_home(home: Path, *, overwrite: bool = False) -> list[Path]:
         if path.exists() and not overwrite:
             continue
         path.write_text(content, encoding="utf-8")
+        # Node aliases, project paths and policy are private working state.
+        _restrict(path, 0o600)
         created.append(path)
     return created
 

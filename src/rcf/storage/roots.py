@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import fnmatch
 import ntpath
+import os
 import posixpath
+import sys
 from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -26,6 +28,22 @@ def normalized(path: str) -> str:
 
 def within(path: str, root: str) -> bool:
     child, parent = normalized(path), normalized(root)
+    return child == parent or child.startswith(parent.rstrip("/") + "/")
+
+
+def within_host(path: str, root: str) -> bool:
+    """``within`` with the host's default case rules for local paths.
+
+    Windows drive paths are already casefolded by ``normalized``; UNC paths are
+    not, so both are casefolded here.  macOS APFS is case-insensitive by
+    default, so two spellings name one directory there.  Treating them as
+    different would let a write guard be bypassed.  On a case-sensitive macOS
+    volume this refuses a little more, never less.
+    """
+
+    child, parent = normalized(path), normalized(root)
+    if os.name == "nt" or sys.platform == "darwin":
+        child, parent = child.casefold(), parent.casefold()
     return child == parent or child.startswith(parent.rstrip("/") + "/")
 
 
@@ -74,10 +92,10 @@ def project_root(config, project, node, root_id: str, store) -> str:
     return local_root(path) if node.kind is NodeKind.LOCAL else path
 
 
-def all_runs(store) -> list[RunRecord]:
+def all_runs(store, *, purpose: str = "cleanup") -> list[RunRecord]:
     records = store.list_runs(limit=20001)
     if len(records) > 20000:
-        raise Conflict("reference index exceeds the safety limit; cleanup is blocked")
+        raise Conflict(f"reference index exceeds the safety limit; {purpose} is blocked")
     return records
 
 

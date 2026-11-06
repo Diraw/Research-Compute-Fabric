@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .core.config import Config, default_home
-from .core.errors import NotFound, RcfError, UnsupportedOperation
+from .core.errors import Conflict, NotFound, RcfError, UnsupportedOperation
 from .core.ids import new_id, now_utc
 from .core.models import (
     EnvironmentPlan,
@@ -583,11 +583,24 @@ class RcfService:
 
         record = self.runs.get(run_id)
         fetcher = ResultFetcher(self.config, self.store, self.runner)
-        from .storage.roots import CONTROLLER_NODE, expand_root
+        from .storage.roots import CONTROLLER_NODE, expand_root, within_host
 
         node = self.config.node(record.node_id)
         destination = str(Path(dest).expanduser().absolute())
         source_root = expand_root(node, record.result_dir or record.workdir, self.runner)
+        if node.kind is NodeKind.LOCAL:
+            # Name the real problem before guard acquisition turns it into an
+            # opaque "storage roots already guarded" conflict.
+            guarded = [source_root]
+            if record.workdir:
+                guarded.append(expand_root(node, record.workdir, self.runner))
+            for owned in dict.fromkeys(guarded):
+                if within_host(destination, owned) or within_host(owned, destination):
+                    raise Conflict(
+                        "source and destination output trees must not overlap",
+                        hint="choose a destination outside the run's own output/work directory",
+                        detail={"dest": destination, "source": owned},
+                    )
         guards = self.storage.ledger.acquire_guards(
             node.id, [source_root], operation="fetch", owner_id=record.run_id,
         )

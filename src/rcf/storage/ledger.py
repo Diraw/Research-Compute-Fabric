@@ -10,7 +10,7 @@ import json
 import ntpath
 import posixpath
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import PurePosixPath, PureWindowsPath
@@ -89,6 +89,26 @@ def _copy(value: dict[str, Any]) -> dict[str, Any]:
     return json.loads(_dump(value))
 
 
+def physical_identities(nodes: Mapping[str, Any]) -> dict[str, str]:
+    """Connection-endpoint identities shared by guards, plans and fetch checks.
+
+    Only routing fields identify the command endpoint: display names, work
+    roots, executor kind and SSH timeouts do not turn overlapping paths into
+    independent filesystems.
+    """
+
+    identities = {
+        name: ("local:controller" if node.kind.value == "local" else "ssh:" + stable_hash({
+            "alias": node.ssh_alias,
+            "program": node.ssh.program,
+            "options": node.ssh.extra_options,
+        }, length=64))
+        for name, node in nodes.items()
+    }
+    identities["controller"] = "local:controller"
+    return identities
+
+
 def _root_key(root: str) -> tuple[str, ...]:
     """Lexical components only; never resolve symlinks or touch a filesystem."""
     if not isinstance(root, str) or not root or "\x00" in root:
@@ -128,18 +148,7 @@ class Ledger:
             if nodes is not None:
                 # Persist identities for every adapter sharing this database,
                 # including fresh connections used by submit/push/fetch.
-                identities = {
-                    name: ("local:controller" if node.kind.value == "local" else "ssh:" + stable_hash({
-                        "alias": node.ssh_alias,
-                        "program": node.ssh.program,
-                        "options": node.ssh.extra_options,
-                    }, length=64))
-                    for name, node in nodes.items()
-                }
-                # Only connection-routing fields identify the command endpoint:
-                # display names, work roots, executor kind and SSH timeouts do
-                # not turn overlapping paths into independent filesystems.
-                identities["controller"] = "local:controller"
+                identities = physical_identities(nodes)
                 # This is a current-config index, not ownership evidence. Keep
                 # removed nodes absent so their persisted guards fail closed.
                 self._conn.execute("DELETE FROM storage_guard_nodes")

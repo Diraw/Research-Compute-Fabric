@@ -29,7 +29,9 @@ from ..executors.factory import build_executor
 from ..executors.ssh import SshTransport
 from ..security.policy import SecurityPolicy
 from ..security.redaction import redact
+from ..storage.ledger import physical_identities
 from ..storage.output_probe import output_command
+from ..storage.roots import all_runs, local_root, normalized, within_host
 from .store import Store
 
 ARCHIVE_NAME = "rcf-fetch.tar.gz"
@@ -65,11 +67,15 @@ class ResultFetcher:
             raise RcfError("fetch limit must be positive")
         # Do not resolve: that would conceal a symlink/reparse parent.
         dest = Path(os.path.abspath(dest.expanduser()))
+        _refuse_foreign_destination(self.config, self.store, record, dest)
         _prepare_destination(dest, force=force)
         node = self.config.node(record.node_id)
         executor = build_executor(self.config, node, self.runner)
         source = self._resolve_source(executor, record, limit=limit)
         _manifest_paths(source.entries)
+        # Re-check after enumeration: the destination must not become the source
+        # of another run between the first check and the copy.
+        _refuse_foreign_destination(self.config, self.store, record, dest, source=source)
         try:
             if node.kind is NodeKind.LOCAL:
                 result = self._copy_local(source, dest)
@@ -252,6 +258,52 @@ def _is_darwin_system_alias(part: Path) -> bool:
         return os.path.realpath(text).startswith("/private/")
     except OSError:
         return False
+
+
+def _refuse_foreign_destination(
+    config: Config, store: Store, record: RunRecord, dest: Path,
+    *, source: SourceSet | None = None,
+) -> None:
+    """Refuse to write a run's outputs on top of another run's own trees.
+
+    ``--force`` means "merge into a directory I chose", not "overwrite somebody
+    else's results".  Without this check a fetch into another run's output root
+    silently replaced its files while that run's record kept advertising them as
+    intact -- the one failure mode this tool exists to prevent.  Only runs on the
+    same physical node are compared: a path string on another machine names a
+    different directory.
+    """
+
+    target = normalized(local_root(dest))
+    identities = physical_identities(config.nodes)
+    target_physical = identities.get(record.node_id, "unconfigured:" + record.node_id)
+    # ``all_runs`` refuses above its index limit instead of silently checking
+    # only the newest 20k runs and treating the rest as unowned.
+    for other in all_runs(store, purpose="fetch"):
+        if other.run_id == record.run_id:
+            continue
+        other_physical = identities.get(other.node_id, "unconfigured:" + other.node_id)
+        if other_physical != target_physical:
+            continue
+        for kind, path in (("result_dir", other.result_dir),
+                           ("workdir", other.workdir),
+                           ("run_dir", other.handle.workdir if other.handle else None)):
+            if path and within_host(target, path):
+                raise Conflict(
+                    f"destination {dest} is inside another run's {kind}",
+                    hint=(
+                        "fetch into a directory you own; merging into a run's own "
+                        "output/work/run directory would overwrite its results"
+                    ),
+                    detail={"dest": str(dest), "other_run": other.run_id, "root_kind": kind},
+                )
+    node = config.nodes.get(record.node_id)
+    if source is not None and node is not None and node.kind is NodeKind.LOCAL:
+        # Our own source must not be the merge target either.  Only a local
+        # source shares a filesystem with the destination; the same path string
+        # on a remote node names another machine's directory.
+        if within_host(target, source.root) or within_host(source.root, target):
+            raise Conflict("source and destination output trees must not overlap")
 
 
 def _prepare_destination(dest: Path, *, force: bool) -> None:

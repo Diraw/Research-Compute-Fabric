@@ -33,8 +33,17 @@ from rcf.storage.output_probe import local_output_manifest, parse_output_manifes
 
 
 class Audit:
+    """Minimal Store stand-in: audit sink plus an empty run index.
+
+    The fetcher asks the store which runs already own a directory so a merge
+    cannot overwrite another run's results; these fixtures own nothing.
+    """
+
     def record_audit(self, **kwargs):
         self.last = kwargs
+
+    def list_runs(self, *, limit: int = 50, state=None):
+        return []
 
 
 def record(root: Path, node: str = "laptop", *, custom: str | None = None) -> RunRecord:

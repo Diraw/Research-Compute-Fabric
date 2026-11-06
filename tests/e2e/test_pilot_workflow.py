@@ -40,16 +40,21 @@ def wait_file(path: Path, timeout: float = 12) -> str:
     pytest.fail(f"pilot did not produce {path}")
 
 
-def local_job(tmp_path: Path, argv: list[str], **command_args) -> JobSpec:
+def local_job(tmp_path: Path, argv: list[str], *, pilot_seconds=2, **command_args) -> JobSpec:
     return JobSpec(
         run_id="pilot_e2e", run_dir=str(tmp_path / "run"),
         command=PlannedCommand(argv=argv, workdir=str(tmp_path), **command_args),
         log_path=str(tmp_path / "run" / "run.log"), resources=ResourceRequirements(),
-        metadata={"pilot_seconds": 2},
+        metadata={"pilot_seconds": pilot_seconds},
     )
 
 
-def test_local_two_second_deadline_kills_child_and_preserves_progress(tmp_path):
+def test_local_short_deadline_kills_child_and_preserves_progress(tmp_path):
+    # The deadline is 5s, not 2s: starting two interpreters (parent and child)
+    # can exceed a 2s budget on a loaded or slow machine, which would fail the
+    # test before the watchdog had anything to kill.  The pilot unit tests
+    # cover the deadline plumbing; this test proves the kill and the preserved
+    # progress.
     # Both processes stay alive, and on POSIX the child ignores TERM to prove
     # the watchdog escalates for the group after its leader has already exited.
     child = tmp_path / "child.py"
@@ -74,14 +79,14 @@ def test_local_two_second_deadline_kills_child_and_preserves_progress(tmp_path):
     )
     ex = LocalExecutor(NodeSpec(id="local", kind="local"), tmp_path, SubprocessRunner())
     start = time.monotonic()
-    receipt = ex.submit(local_job(tmp_path, [sys.executable, str(parent)]))
+    receipt = ex.submit(local_job(tmp_path, [sys.executable, str(parent)], pilot_seconds=5))
     run_dir = Path(receipt.handle.workdir)
     assert wait_file(run_dir / "exit_code").strip() == "124"
-    assert time.monotonic() - start < 8
+    assert time.monotonic() - start < 15
     report = json.loads(wait_file(run_dir / "pilot.json"))
-    assert report["timeout_seconds"] == 2
+    assert report["timeout_seconds"] == 5
     assert report["timed_out"] is True
-    assert 1.9 <= report["elapsed_seconds"] < 7
+    assert 4.9 <= report["elapsed_seconds"] < 12
     assert report["exit_code"] == 124
     assert wait_file(run_dir / "finished_at").strip().endswith("Z")
     assert json.loads(wait_file(run_dir / "progress.jsonl")) == {"pilot": "1"}
@@ -104,10 +109,12 @@ def test_local_two_second_deadline_kills_child_and_preserves_progress(tmp_path):
             assert not LocalExecutor._alive(child_pid)
 
 
-@pytest.mark.parametrize("child_seconds", [0.4, 4.0])
+@pytest.mark.parametrize("child_seconds", [0.4, 8.0])
 @pytest.mark.parametrize("generations", [1, 2])
 def test_watchdog_tracks_descendants_after_immediate_parent_exit(tmp_path, child_seconds, generations):
     from rcf.progress.pilot import pilot_files
+
+    deadline = 5
 
     child = tmp_path / "child.py"
     child.write_text(
@@ -130,7 +137,7 @@ def test_watchdog_tracks_descendants_after_immediate_parent_exit(tmp_path, child
                                encoding="utf-8")
         parent = grandparent
     command = PlannedCommand(argv=[sys.executable, str(parent)], workdir=str(tmp_path))
-    for name, text in pilot_files(command, 2, posix_shell=False).items():
+    for name, text in pilot_files(command, deadline, posix_shell=False).items():
         (tmp_path / name).write_text(text, encoding="utf-8")
     start = time.monotonic()
     result = SubprocessRunner().run(
@@ -140,10 +147,10 @@ def test_watchdog_tracks_descendants_after_immediate_parent_exit(tmp_path, child
     try:
         assert wait_file(tmp_path / "orphan.pid").strip().isdigit()
         report = json.loads(wait_file(tmp_path / "pilot.json"))
-        if child_seconds > 2:
+        if child_seconds > deadline:
             assert result.returncode == 124, (report, result.stderr)
             assert report["timed_out"] is True
-            assert 1.9 <= report["elapsed_seconds"] < 4
+            assert 4.9 <= report["elapsed_seconds"] < 9
             heartbeat = wait_file(tmp_path / "orphan.heartbeat")
             time.sleep(0.2)
             assert (tmp_path / "orphan.heartbeat").read_text(encoding="utf-8") == heartbeat
@@ -154,7 +161,7 @@ def test_watchdog_tracks_descendants_after_immediate_parent_exit(tmp_path, child
             assert (tmp_path / "orphan.finished").read_text(encoding="utf-8") == "completed"
     finally:
         # The failing pre-fix reproduction is self-bounded and leaves no worker.
-        time.sleep(max(0, child_seconds + 0.5 - (time.monotonic() - start)))
+        time.sleep(max(0, min(child_seconds, deadline) + 0.5 - (time.monotonic() - start)))
 
 
 @pytest.mark.parametrize("exit_code", [0, 7])

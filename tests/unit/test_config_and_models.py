@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import stat
+
 import pytest
 from conftest import make_home
 from pydantic import ValidationError
@@ -233,3 +236,12 @@ def test_run_request_rejects_structured_parameters():
 def test_project_path_fallback_wildcard():
     project = ProjectSpec(id="p", entrypoint="true", paths={"*": "/srv/p"})
     assert project.path_for("any-node") == "/srv/p"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows ACLs do not use POSIX mode bits")
+def test_starter_home_is_private(tmp_path):
+    home = tmp_path / "rcf-home"
+    created = write_starter_home(home)
+    assert stat.S_IMODE(home.stat().st_mode) == 0o700
+    assert stat.S_IMODE((home / "state").stat().st_mode) == 0o700
+    assert created and all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in created)

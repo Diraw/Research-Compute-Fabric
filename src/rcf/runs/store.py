@@ -12,6 +12,7 @@ try to be a multi-writer server (that is what the roadmap's web API is for).
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 from collections.abc import Iterable
@@ -146,6 +147,12 @@ class Store:
             self._conn = sqlite3.connect(str(self.path), check_same_thread=False, timeout=10)
         except sqlite3.Error as exc:  # pragma: no cover - filesystem issue
             raise StoreError(f"cannot open database {self.path}: {exc}") from exc
+        if os.name != "nt":
+            # The audit trail and run history are the user's private activity.
+            try:
+                self.path.chmod(0o600)
+            except OSError:
+                pass
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.execute("PRAGMA journal_mode=WAL")

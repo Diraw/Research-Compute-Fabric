@@ -1,7 +1,9 @@
 """Counterexamples for physical aliases and scientific input/result protection."""
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from threading import Event
@@ -15,8 +17,9 @@ from rcf.core.ids import now_utc
 from rcf.core.models import JobHandle, NodeSpec, RunRecord, SshOptions
 from rcf.runs.store import Store
 from rcf.service import RcfService
+from rcf.storage import roots as storage_roots
 from rcf.storage.ledger import Ledger
-from rcf.storage.roots import normalized, reference_fingerprint
+from rcf.storage.roots import all_runs, normalized, reference_fingerprint
 
 
 def service_for(tmp_path, *, inputs=(), keep=0):
@@ -32,14 +35,14 @@ def service_for(tmp_path, *, inputs=(), keep=0):
     return RcfService(Config.load(home), actor="test"), code
 
 
-def add_run(service, run_id, code, output, workdir, *, age=0):
+def add_run(service, run_id, code, output, workdir, *, age=0, node_id="local"):
     workdir.mkdir(parents=True, exist_ok=True)
     (workdir / "run.json").write_text(json.dumps({"run_id": run_id}), encoding="utf-8")
     service.store.insert_run(RunRecord(
-        run_id=run_id, project_id="demo", node_id="local", executor="local",
+        run_id=run_id, project_id="demo", node_id=node_id, executor="local",
         state="succeeded", created_at=now_utc() - timedelta(days=age),
         finished_at=now_utc() - timedelta(days=age), workdir=str(code), result_dir=str(output),
-        handle=JobHandle(kind="local", node_id="local", workdir=str(workdir)),
+        handle=JobHandle(kind="local", node_id=node_id, workdir=str(workdir)),
     ))
 
 
@@ -50,10 +53,25 @@ def test_two_local_replica_cleanups_cannot_delete_both_copies(tmp_path, monkeypa
         for name, output in zip(("run_A", "run_B"), outputs, strict=True):
             output.mkdir(parents=True)
             add_run(service, name, code, output, output.parent)
-        (outputs[0] / "result.dat").write_bytes(b"only result")
-        service.fetch_results("run_A", dest=str(outputs[1]), confirm=True)
-        service.fetch_results("run_B", dest=str(outputs[0]), force=True, confirm=True)
+        payload = b"only result"
+        for output in outputs:
+            (output / "result.dat").write_bytes(payload)
         service.scan_storage("demo", "local")
+        # Legacy layout: fetches used to be allowed to merge one run's output
+        # into the other's, leaving mutual verified copy receipts.  Fetch now
+        # refuses to build that layout (see test_fetch_force_never_merges_into_...),
+        # but a database written before the guard still describes it, so the
+        # cleanup fencing must keep refusing to delete both copies.
+        for source, dest, run_id in ((outputs[0], outputs[1], "run_A"),
+                                     (outputs[1], outputs[0], "run_B")):
+            service.storage.ledger.record_copy({
+                "project_id": "demo", "run_id": run_id,
+                "source_node": "local", "source_root": str(source),
+                "dest_node": "controller", "dest_root": str(dest),
+                "entries": [{"path": "result.dat", "bytes": len(payload),
+                             "sha256": hashlib.sha256(payload).hexdigest()}],
+                "complete": True, "verified": True,
+            })
         plans = [service.plan_storage_cleanup("demo", "local", run_id=name, kind="replica")
                  for name in ("run_A", "run_B")]
         assert all(len(p["entries"]) == 1 for p in plans)
@@ -314,3 +332,123 @@ def test_legacy_local_alias_guard_resumes_exact_token_without_releasing_exclusio
         with pytest.raises(Conflict):
             ledger.acquire_guard("local", [str(code)], operation="fetch", owner_id="new-run")
         assert ledger.guards()[0] == payload
+
+
+def test_fetch_force_never_merges_into_another_runs_output_root(tmp_path):
+    """``--force`` means "merge into my directory", not "overwrite their results".
+
+    Before the guard, ``fetch run_A --dest run_B/outputs --force`` replaced
+    run_B's files while run_B's record still advertised them as intact.
+    """
+
+    service, code = service_for(tmp_path)
+    with service:
+        outputs = [tmp_path / name / "outputs" for name in ("run_A", "run_B")]
+        for name, output in zip(("run_A", "run_B"), outputs, strict=True):
+            output.mkdir(parents=True)
+            add_run(service, name, code, output, output.parent)
+        (outputs[0] / "result.dat").write_bytes(b"from-A")
+        (outputs[1] / "result.dat").write_bytes(b"from-B")
+        assert (outputs[1] / "result.dat").read_bytes() == b"from-B"
+
+        with pytest.raises(Conflict, match="another run's result_dir"):
+            service.fetch_results("run_A", dest=str(outputs[1]), force=True, confirm=True)
+        assert (outputs[1] / "result.dat").read_bytes() == b"from-B"
+
+        # The same guard covers a run's workdir and run directory.
+        with pytest.raises(Conflict):
+            service.fetch_results("run_A", dest=str(outputs[1].parent / "run"), force=True, confirm=True)
+
+        # An unrelated directory of the operator's own still accepts the copy.
+        payload = service.fetch_results("run_A", dest=str(tmp_path / "mine"), confirm=True)
+        assert payload["files"] == 1 and payload["verified"] is True
+
+
+def test_fetch_into_own_result_root_is_refused_as_overlap(tmp_path):
+    """Fetching a run into its own output root is self-overwrite, not a merge."""
+
+    service, code = service_for(tmp_path)
+    with service:
+        output = tmp_path / "run_A" / "outputs"
+        output.mkdir(parents=True)
+        add_run(service, "run_A", code, output, output.parent)
+        (output / "result.dat").write_bytes(b"from-A")
+        # The service names the real conflict before guard acquisition.  Without
+        # the check this surfaces as the opaque "storage roots already guarded".
+        with pytest.raises(Conflict, match="must not overlap"):
+            service.fetch_results("run_A", dest=str(output), force=True, confirm=True)
+
+
+def test_fetch_refuses_another_runs_root_across_a_local_alias(tmp_path):
+    """Two names for the same local filesystem share one run-directory owner."""
+
+    service, code = service_for(tmp_path)
+    with service:
+        mine = tmp_path / "mine" / "outputs"
+        theirs = tmp_path / "theirs" / "outputs"
+        for output in (mine, theirs):
+            output.mkdir(parents=True)
+        add_run(service, "run_mine", code, mine, mine.parent)
+        add_run(service, "run_alias", code, theirs, theirs.parent, node_id="alias")
+        (mine / "result.dat").write_bytes(b"from-mine")
+        with pytest.raises(Conflict, match="another run's result_dir"):
+            service.fetch_results("run_mine", dest=str(theirs), force=True, confirm=True)
+
+
+def test_replica_owned_by_another_run_uses_that_runs_retained_copy(tmp_path):
+    """The retained copy belongs to the registered owner, not the cleaning run.
+
+    Two runs wrote into one output root, so the ownership row names run_B while
+    the cleanup is requested for run_A.  run_B's fetch receipt is still valid
+    evidence that the content survives elsewhere; keying the lookup on run_A hid
+    it and left the plan permanently blocked.
+    """
+
+    service, code = service_for(tmp_path)
+    with service:
+        shared = tmp_path / "shared" / "outputs"
+        shared.mkdir(parents=True)
+        add_run(service, "run_A", code, shared, shared.parent)
+        add_run(service, "run_B", code, shared, shared.parent)
+        payload = b"only result"
+        (shared / "result.dat").write_bytes(payload)
+        entry = {"path": "result.dat", "bytes": len(payload),
+                 "sha256": hashlib.sha256(payload).hexdigest()}
+        service.storage.ledger.record_owned(
+            "demo", "local", normalized(str(shared)), [entry],
+            kind="output", owner_id="run_B",
+        )
+        backup = tmp_path / "backup"
+        backup.mkdir()
+        (backup / "result.dat").write_bytes(payload)
+        service.storage.ledger.record_copy({
+            "project_id": "demo", "run_id": "run_B",
+            "source_node": "local", "source_root": str(shared),
+            "dest_node": "controller", "dest_root": str(backup),
+            "entries": [entry], "complete": True, "verified": True,
+        })
+
+        plan = service.plan_storage_cleanup("demo", "local", run_id="run_A", kind="replica")
+        assert len(plan["entries"]) == 1
+        assert plan["entries"][0]["retained_copy"]["root"] == str(backup)
+
+
+def test_within_host_applies_case_rules_per_platform(monkeypatch):
+    """macOS APFS is case-insensitive by default; two spellings are one tree."""
+
+    monkeypatch.setattr(storage_roots.sys, "platform", "darwin")
+    assert storage_roots.within_host("/data/RunA/outputs", "/data/runa")
+    if os.name != "nt":
+        monkeypatch.setattr(storage_roots.sys, "platform", "linux")
+        assert not storage_roots.within_host("/data/RunA/outputs", "/data/runa")
+
+
+def test_reference_scan_refuses_above_its_index_limit():
+    """A silently truncated run index must block the caller, not look complete."""
+
+    class HugeStore:
+        def list_runs(self, *, limit=50, state=None):
+            return [object()] * (limit + 1)
+
+    with pytest.raises(Conflict, match="fetch is blocked"):
+        all_runs(HugeStore(), purpose="fetch")
