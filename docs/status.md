@@ -3,6 +3,8 @@
 > 更新：2026-11-06。**当前工作树离线集成验收通过**，不是已上传/已发布版本。
 > 2026-11-07 晚追加：分区容量与 `MaxTime` 校验、`run reconcile`、失败诊断兜底、
 > 取消后的退出码修正。全套离线回归重跑：**1050 passed / 12 skipped** + **22 passed**。
+> 另在 lab-hpc 完成两项真机验收：GPU 驱动级显存往返（job 267665）与
+> PENDING → RUNNING 转换（job 267668）。
 > 测试环境：Windows / Python 3.11.14（2026-11-06）；macOS arm64 / Python 3.12.16
 > 是 2026-11-04 的真实节点记录，本轮改动未在 macOS 复跑。
 > 原生 Linux 与远端 GitHub CI 未在本轮执行。
@@ -63,6 +65,8 @@
 | 离线候选构建 | `uv run --frozen --offline python tools/release_check.py --source . --output .tmp/release-candidate-*` | **通过**；源码清单、wheel/sdist、隔离安装与 31 工具验证；evidence.json 留在本机，不纳入公开源码 |
 | 三平台 CI | Windows/Linux/macOS × Python 3.11/3.12 workflow | 已配置不等于已执行；远端结果未声明 |
 | 真实取消（2026-11-07） | lab-hpc，CLI `run plan/submit/cancel`：job 267660（运行中）与 267662（排队中）均在 2 秒内得到终态与 `scancel` 回执；修正退出码后 job 267664（运行中）复验 | **通过**；同时发现并修正「取消后记 exit 0」：现在只取 `.batch` 行的信号，该行尚未落盘时记无退出码，不再伪造 0 |
+| GPU 驱动级（2026-11-07） | lab-hpc `gpu` 分区，job 267665，`tests/integration/assets/gpu_cuda_smoke.py`：`cuInit` → `cuCtxCreate` → 64 MiB `cuMemAlloc` → H2D/D2H 往返 | **通过**；RTX 3090 24259.7 MB，`CUDA_VISIBLE_DEVICES=0`，mismatches 0；不声明 CUDA 内核或数值正确性 |
+| PENDING → RUNNING（2026-11-07） | 3 个 @8 GPU 作业争用 2 节点 `gpu` 分区：第 3 个 16:20:07 提交为 pending → 16:20:46 running（gpu1）→ 16:21:34 succeeded | **通过**；首次拿到真实非空 `squeue` 夹具与排队时长（39 秒） |
 | 真实设备 | 私域多节点运行样本（Slurm / SSH / WSL / macOS） | 已有运行证据；公开版本不声明特定站点兼容性；存储清理、进度校准仍待真机验收 |
 
 Windows Bash 用例通过 `tests/bash_support.py` 选择 Git Bash；缺少平台能力的 skip 必须保留

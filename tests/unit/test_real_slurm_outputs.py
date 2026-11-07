@@ -84,3 +84,25 @@ def test_cancelled_before_it_ran_has_no_batch_step():
     text = "267662|CANCELLED by 2038|0:0|00:00:00\n"
 
     assert parsers.parse_sacct_step_exit(text, job_id="267662") is None
+
+
+def test_real_squeue_keeps_pending_reason_and_gres():
+    """A queued GPU job, captured 2026-11-07 while three 8-GPU jobs competed.
+
+    ``%b`` comes back as ``gpu:8,gpu:8`` on this Slurm build; the count that
+    matters is still 8, and the reason a caller needs is ``(Resources)``.
+    """
+
+    jobs = parsers.parse_squeue(read("squeue_pending.txt"))
+    by_id = {job.job_id: job for job in jobs}
+
+    pending = by_id["5003"]
+    assert pending.state == "PENDING"
+    assert pending.reason == "(Resources)"
+    assert pending.gpus == 8
+    assert pending.nodes == 1
+
+    running = by_id["5002"]
+    assert running.state == "RUNNING"
+    assert running.node_list == "gpu2"
+    assert running.elapsed == "0:16"

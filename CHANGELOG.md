@@ -86,6 +86,13 @@ behavior, and every entry states the verification boundary.
 
 ### Tests
 
+- Added `tests/integration/assets/gpu_cuda_smoke.py` and `test_gpu_compute.py`: a
+  driver-tier check that loads `libcuda.so.1` through `ctypes`, allocates 64 MiB
+  and round-trips bytes inside a real Slurm allocation. No toolkit, no wheel, no
+  kernel; verified on lab-hpc 2026-11-07 (RTX 3090, 0 mismatches).
+- Added `tests/fixtures/slurm/squeue_pending.txt`, the first non-empty `squeue`
+  sample: three 8-GPU jobs competing for a two-node partition, with a PENDING row
+  and its `(Resources)` reason.
 - Added `tests/unit/test_observation_truthfulness.py` covering freshness,
   error lifecycle, diagnosis surfacing, and SSH stderr preservation.
 - Added contract tests for inputs manifest hand-off from plan to run and for
