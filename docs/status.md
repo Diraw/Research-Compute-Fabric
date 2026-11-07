@@ -1,9 +1,8 @@
 # 功能完成度与验收状态
 
 > 更新：2026-11-06。**当前工作树离线集成验收通过**，不是已上传/已发布版本。
-> 2026-11-06 晚追加分区容量与 `MaxTime` 校验（`resources/parsers.py`、
-> `resources/inspector.py`、`runs/planner.py`）。这一笔按操作者要求未运行 pytest，
-> 改用定向脚本覆盖 6 个分支，并在 lab-hpc 上重新 plan 复核；全套离线回归需下一轮重跑。
+> 2026-11-07 晚追加：分区容量与 `MaxTime` 校验、`run reconcile`、失败诊断兜底、
+> 取消后的退出码修正。全套离线回归重跑：**1050 passed / 12 skipped** + **22 passed**。
 > 测试环境：Windows / Python 3.11.14（2026-11-06）；macOS arm64 / Python 3.12.16
 > 是 2026-11-04 的真实节点记录，本轮改动未在 macOS 复跑。
 > 原生 Linux 与远端 GitHub CI 未在本轮执行。
@@ -31,7 +30,7 @@
 | Windows Task Scheduler | `executors/windows_task.py`、`test_windows_task_executor.py`、`test_windows_task_safety.py` | 登录会话、WSL、取消证据等设备行为待验收 |
 | CLI / MCP | `cli/main.py`、`mcp/server.py`、`test_cli_and_mcp.py` | 工具数量与入口以当前 `rcf mcp tools` 为准 |
 | 提交、租约与不确定状态 | `runs/`、`test_submission_safety.py`、`test_submission_preflight.py` | unknown 不等于失败；先恢复核查再考虑新计划 |
-| 观测语义（新鲜度、错误生命周期、ssh 诊断） | `runs/manager.py`、`runs/store.py`、`core/runner.py`、`test_observation_truthfulness.py` | 2026-11-04 新增：每次探测确认写 `state_observed_at`，`run list/status` 返回 `observed_age_seconds` 与 `stale`；成功探测清掉旧 `error` 并记 `observe_recovered`；`get_run`/`run status` 顶层暴露最近一条 `diagnosis`，`run list` 也批量返回（单次 SQL，无 N+1）；ssh 255 的 detail 保留 stderr；旧库中 `succeeded` 行的陈旧观测错误一次性清除 |
+| 观测语义（新鲜度、错误生命周期、ssh 诊断） | `runs/manager.py`、`runs/store.py`、`core/runner.py`、`test_observation_truthfulness.py` | 2026-11-04 新增：每次探测确认写 `state_observed_at`，`run list/status` 返回 `observed_age_seconds` 与 `stale`；成功探测清掉旧 `error` 并记 `observe_recovered`；`get_run`/`run status` 顶层暴露最近一条 `diagnosis`，`run list` 也批量返回（单次 SQL，无 N+1）；ssh 255 的 detail 保留 stderr；旧库中 `succeeded` 行的陈旧观测错误一次性清除。2026-11-07 追加：`rcf run reconcile` 按 `--older-than-minutes` 重新探测陈旧的未终态 run（`--limit` 限流，CLI-only）；无匹配模式的失败记 `exit N: no known failure pattern; last log line: ...`，不再留空 |
 | 产物契约语义 | `runs/manager.py`、`test_planner_and_manager.py` | `command_override` 的 run 不再误报 `contract_violation`，改记 `output_contract_unchecked`；`output_contract=none` 记 `output_contract_unmanaged`；真正的空产物仍标记违规 |
 | 复现元数据传递 | `runs/manager.py`、`test_conventions.py`、`test_planner_and_manager.py` | plan 的 git/inputs 完整写入 run；新增 inputs 摘要传递契约测试；未声明 inputs 或非 git 项目保持 warn，不伪造字段 |
 | plan 期资源校验 | `resources/inspector.py`、`runs/planner.py`、`test_parsers.py`、`test_planner_and_manager.py` | 2026-11-06 修正：Slurm 的 `cpu_capacity` / `memory_capacity` 改用目标分区每节点 `%c` / `%m`，不再拿登录节点冒充计算节点（此前 64 核请求被判 fail、300 GB 请求被判 ok）；分区信息缺失时降为 warn 并在 detail 写明 `login node`。新增 `partition_time_limit` 比对 `MaxTime`，`infinite` / `PARTITION_LIMIT` 不当作上限 |
@@ -39,7 +38,7 @@
 | 结果回收与存储治理 | `runs/fetch.py`、`storage/`、`test_storage_*.py` | 有界扫描/归属/指纹/守卫；fetch 目标不得与其他 run 的 result/work/run 目录重叠（同物理节点，含本地别名与 macOS 大小写）；保留副本按登记归属验证；不可当通用备份或垃圾回收器 |
 | 进度、ETA、试跑、预算 | `progress/`、`test_progress_*.py`、`test_pilot_*.py` | reporter 是项目证据，不保证工作量或 ETA 真实性/精确性 |
 | 源码交付与构建 | `test_delivery.py`、`test_release_check.py`、`tools/release_check.py` | 离线预检已通过，最终候选以 evidence.json 为准 |
-| 真实路径集成（opt-in） | `tests/integration/`、`test_readonly_smoke.py`、`test_local_submit.py`、`test_remote_submit.py` | 默认 skip；2026-11-04 只读 smoke 已在两个真实节点通过，隔离 home 的真实本机 60 秒全链路通过；远端提交/cancel 模板已就绪，待授权执行 |
+| 真实路径集成（opt-in） | `tests/integration/`、`test_readonly_smoke.py`、`test_local_submit.py`、`test_remote_submit.py` | 默认 skip；2026-11-04 只读 smoke 已在两个真实节点通过，隔离 home 的真实本机 60 秒全链路通过；2026-11-07 远端 cancel（运行中与排队中各一次）在 lab-hpc 真机通过；集成模板改为轮询终态 |
 | 公开材料隐私 | `tools/publication_check.py`、`test_publication_hygiene.py` | 启发式，不扫描 Git 历史，不证明无秘密 |
 
 ## 3. 最终验收记录
@@ -52,6 +51,7 @@
 | 项目 | 命令/证据 | 结果 |
 | --- | --- | --- |
 | 离线全套（Windows） | `uv run --frozen --offline pytest -m "not integration" -n auto --ignore=tests/e2e/test_pilot_workflow.py --ignore=tests/unit/test_runner.py`；`uv run --frozen --offline pytest tests/e2e/test_pilot_workflow.py tests/unit/test_runner.py` | **1034 passed / 12 skipped**，85.56 秒 + **22 passed**，44.72 秒（2026-11-06，Python 3.11.14） |
+| 离线全套（Windows，本轮） | 同上两条命令 | **1050 passed / 12 skipped**，79.40 秒 + **22 passed**，45.72 秒（2026-11-07，Python 3.11.14） |
 | 离线全套（macOS arm64） | `.venv/bin/python -m pytest -m "not integration" -o addopts="--strict-markers" -q -p no:cacheprovider` | **994 passed / 43 skipped**，114.78 秒（2026-11-04 记录；本轮未复跑） |
 | POSIX 私有权限（WSL Ubuntu 24.04） | `PYTHONPATH=src pytest -q tests/unit/test_store.py::test_state_database_is_private tests/unit/test_config_and_models.py::test_starter_home_is_private` | **2 passed**（2026-11-06，Python 3.12.3）；只覆盖两个权限断言，不是 Linux 全套 |
 | 公开材料扫描 | `uv run --frozen --offline python tools/publication_check.py --source . --include-code` | **通过，0 findings**；启发式，不扫描历史 |
@@ -62,7 +62,8 @@
 | 真实 Slurm 夹具（2026-11-04） | `tests/fixtures/slurm/`、`test_real_slurm_outputs.py` | **通过**；真实 `sinfo` 的 `%F`/`+` 内存后缀/`(null)`/`infinite` 与 `sacct` 的 `.batch`/`.extern` 行均被覆盖 |
 | 离线候选构建 | `uv run --frozen --offline python tools/release_check.py --source . --output .tmp/release-candidate-*` | **通过**；源码清单、wheel/sdist、隔离安装与 31 工具验证；evidence.json 留在本机，不纳入公开源码 |
 | 三平台 CI | Windows/Linux/macOS × Python 3.11/3.12 workflow | 已配置不等于已执行；远端结果未声明 |
-| 真实设备 | 私域多节点运行样本（Slurm / SSH / WSL / macOS） | 已有运行证据；公开版本不声明特定站点兼容性；取消、存储清理、进度校准仍待真机验收 |
+| 真实取消（2026-11-07） | lab-hpc，CLI `run plan/submit/cancel`：job 267660（运行中）与 267662（排队中）均在 2 秒内得到终态与 `scancel` 回执；修正退出码后 job 267664（运行中）复验 | **通过**；同时发现并修正「取消后记 exit 0」：现在只取 `.batch` 行的信号，该行尚未落盘时记无退出码，不再伪造 0 |
+| 真实设备 | 私域多节点运行样本（Slurm / SSH / WSL / macOS） | 已有运行证据；公开版本不声明特定站点兼容性；存储清理、进度校准仍待真机验收 |
 
 Windows Bash 用例通过 `tests/bash_support.py` 选择 Git Bash；缺少平台能力的 skip 必须保留
 具体原因。测试禁止连接真实服务器，不为通过而放宽断言，不安装依赖、不清空用户工作树。

@@ -42,6 +42,20 @@ from .preflight import validate_plan
 from .store import Store
 
 
+def state_age_seconds(record: RunRecord) -> float | None:
+    """How long ago the current state claim was confirmed, or ``None``.
+
+    ``last_observed_at`` moves on failed probes too, so it cannot answer this:
+    a dead node would keep looking freshly checked.  The claim's age comes from
+    ``state_observed_at``, and from ``submitted_at`` before the first probe.
+    """
+
+    basis = record.state_observed_at or record.submitted_at
+    if basis is None:
+        return None
+    return max((now_utc() - basis).total_seconds(), 0.0)
+
+
 class RunManager:
     def __init__(
         self,
@@ -332,9 +346,10 @@ class RunManager:
         if status.state.terminal and record.finished_at is None:
             record.finished_at = status.finished_at or status.observed_at
             self._verify_artifacts(record, executor)
-            if status.state in (RunState.FAILED, RunState.LOST):
-                self._diagnose_failure(record, executor)
+            became_terminal = True
             changed = True
+        else:
+            became_terminal = False
         if changed:
             if not self.store.update_run(record):
                 return self.get(record.run_id)
@@ -348,11 +363,59 @@ class RunManager:
                     "exit_code": status.exit_code,
                 },
             )
+        if became_terminal and status.state in (RunState.FAILED, RunState.LOST):
+            # After the state event, for two reasons: the trail should read
+            # cause after effect, and a diagnosis that fails must not cost the
+            # state transition that has already been persisted.
+            self._diagnose_failure(record, executor)
         return record
 
     def list(self, *, limit: int = 50, state: RunState | None = None) -> list[RunRecord]:
         self.policy.check("run.list")
         return self.store.list_runs(limit=limit, state=state)
+
+    def reconcile(
+        self,
+        *,
+        limit: int = 20,
+        older_than_seconds: int | None = None,
+    ) -> list[dict[str, object]]:
+        """Re-probe runs whose state claim has gone stale.
+
+        Nothing polls in the background: a run whose submission succeeded but
+        whose outcome was never observed stays ``running`` in the database until
+        someone asks.  This is the "someone asks", bounded by ``limit`` so a
+        cluster-wide sweep cannot turn into a hundred SSH calls.  Probes are
+        read-only; the only write is the state they confirm.
+        """
+
+        self.policy.check("run.status")
+        threshold = (
+            older_than_seconds
+            if older_than_seconds is not None
+            else self.config.settings.runs.stale_after_seconds
+        )
+        rows: list[dict[str, object]] = []
+        for record in self.store.active_runs():
+            age = state_age_seconds(record)
+            if age is None or age <= threshold:
+                continue
+            before = record.state.value
+            refreshed = self._refresh_record(record)
+            rows.append(
+                {
+                    "run_id": record.run_id,
+                    "node_id": record.node_id,
+                    "state_before": before,
+                    "state_after": refreshed.state.value,
+                    "observed_age_seconds": round(age, 3),
+                    "changed": refreshed.state.value != before,
+                    "error": refreshed.error,
+                }
+            )
+            if len(rows) >= limit:
+                break
+        return rows
 
     def events(self, run_id: str, *, limit: int = 100) -> list[RunEvent]:
         self.get(run_id)
@@ -510,6 +573,25 @@ class RunManager:
                 "exit 127: interpreter or command not found in the job environment",
                 {"exit_code": exit_code},
             )
+            return
+
+        # Nothing matched.  Returning silently leaves the reader with an exit code
+        # and a multi-kilobyte log to grep; the last non-empty line is the cheapest
+        # evidence actually available.  Labelling it ``no known failure pattern``
+        # keeps a hint from being mistaken for a conclusion.
+        last_line = next(
+            (line.strip() for line in reversed(tail.splitlines()) if line.strip()), ""
+        )
+        code_label = f"exit {exit_code}" if exit_code is not None else "no exit code"
+        detail = f"{code_label}: no known failure pattern"
+        if last_line:
+            detail = f"{detail}; last log line: {last_line[:200]}"
+        self._event(
+            record.run_id,
+            "diagnosis",
+            detail,
+            {"exit_code": exit_code, "unmatched": True},
+        )
 
     def _verify_artifacts(self, record: RunRecord, executor: Executor) -> None:
         """Close the loop on the artifact contract.

@@ -8,6 +8,15 @@ behavior, and every entry states the verification boundary.
 
 ### Added
 
+- `rcf run reconcile --older-than-minutes 30 --limit 20` re-probes runs whose
+  state claim has gone stale and reports what changed. Nothing polls in the
+  background by design; this is the bounded "someone asks" that was missing, and
+  it is CLI-only so the MCP surface stays at 31 tools. `rcf run list --stale`
+  filters the same set for inspection.
+- A failure with no matching pattern now records a diagnosis instead of nothing:
+  the exit code plus the last non-empty log line, labelled `no known failure
+  pattern`. Before this, every exit-2 failure in the database had a null
+  diagnosis while the answer sat in the last line of its log.
 - `partition_time_limit`: the planner now compares the requested walltime with the
   target partition's `MaxTime` (`sinfo %l`) and fails the plan instead of letting
   `sbatch` reject the job after it is queued. `infinite` and `PARTITION_LIMIT` are
@@ -53,6 +62,15 @@ behavior, and every entry states the verification boundary.
 
 ### Fixed
 
+- A cancelled Slurm run no longer records `exit code 0`. `sacct` reports `0:0`
+  for the allocation row of every cancelled job, so the old code could not tell a
+  cancelled run from a clean finish. The exit code now comes from the `.batch`
+  step when that row already exists (143 for SIGTERM); when it has not landed yet,
+  the run records no exit code at all. Verified on lab-hpc 2026-11-07 with a
+  RUNNING cancel and a PENDING cancel.
+- The failure diagnosis is written after the state event, so the trail reads
+  cause after effect and a diagnosis error can no longer cost the transition
+  that was already persisted.
 - SSH exit 255 keeps the SSH client's stderr in the error detail instead of
   collapsing it into a generic transport failure.
 - Fetching a run into its own output/work root reports the real overlap before

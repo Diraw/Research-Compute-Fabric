@@ -1108,6 +1108,11 @@ def run_list(
     ctx: typer.Context,
     limit: int = typer.Option(20, "--limit"),
     state_filter: str | None = typer.Option(None, "--state"),
+    stale_only: bool = typer.Option(
+        False,
+        "--stale",
+        help="Only runs whose state claim is stale (within the newest --limit rows).",
+    ),
 ) -> None:
     """List recent runs from the local database."""
     state = _state(ctx)
@@ -1130,7 +1135,54 @@ def run_list(
         )
 
     with _errors(state):
-        _emit(state, _service(state).list_runs(limit=limit, state=state_filter), human)
+        rows = _service(state).list_runs(limit=limit, state=state_filter)
+        if stale_only:
+            rows = [row for row in rows if row.get("stale")]
+        _emit(state, rows, human)
+
+
+@run_app.command("reconcile")
+def run_reconcile(
+    ctx: typer.Context,
+    limit: int = typer.Option(20, "--limit"),
+    older_than_minutes: int = typer.Option(
+        30,
+        "--older-than-minutes",
+        help="Only runs whose state claim is older than this.",
+    ),
+) -> None:
+    """Re-probe stale runs instead of leaving an unobserved state in place."""
+    state = _state(ctx)
+
+    def human(payload: dict[str, Any]) -> None:
+        rows = payload["runs"]
+        if not rows:
+            typer.echo("no stale runs")
+            return
+        render.table(
+            ["run id", "before", "after", "claim age", "node", "error"],
+            [
+                [
+                    row["run_id"],
+                    row["state_before"],
+                    row["state_after"],
+                    f"{row['observed_age_seconds'] / 3600:.1f}h",
+                    row["node_id"],
+                    (row["error"] or "-")[:40],
+                ]
+                for row in rows
+            ],
+        )
+        typer.echo(f"{payload['checked']} checked, {payload['changed']} changed")
+
+    with _errors(state):
+        _emit(
+            state,
+            _service(state).reconcile_runs(
+                limit=limit, older_than_seconds=older_than_minutes * 60
+            ),
+            human,
+        )
 
 
 @run_app.command("logs")

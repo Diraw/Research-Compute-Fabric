@@ -350,3 +350,99 @@ def test_mcp_apply_environment_requires_confirmation(tmp_path):
 
     assert refused["ok"] is False
     assert refused["error"]["code"] == "permission_denied"
+
+
+# -- 5. stale reconciliation and unmatched failures ------------------------ #
+
+
+class _Finished:
+    """Executor stub: every probe finds a failed run with a given log."""
+
+    def __init__(self, log: str, exit_code: int = 2) -> None:
+        self.log = log
+        self.exit_code = exit_code
+
+    def status(self, handle):  # noqa: ARG002 - executor contract
+        return JobStatus(
+            state=RunState.FAILED,
+            exit_code=self.exit_code,
+            detail="exit_code file written by the batch script",
+            observed_at=now_utc(),
+            finished_at=now_utc(),
+        )
+
+    def logs(self, handle, tail=40):  # noqa: ARG002 - executor contract
+        return self.log
+
+
+def test_reconcile_probes_only_stale_runs_and_reports_the_change(service, monkeypatch):
+    save_run(service, run_id="run_stale", age=timedelta(minutes=30), with_handle=True)
+    save_run(service, run_id="run_fresh", age=timedelta(seconds=5), with_handle=True)
+    probed: list[str] = []
+
+    class Executor(_Finished):
+        def status(self, handle):
+            probed.append(handle.workdir)
+            return super().status(handle)
+
+    monkeypatch.setattr(
+        manager_module, "build_executor", lambda *a, **k: Executor("plain failure\n")
+    )
+
+    payload = service.reconcile_runs(limit=10, older_than_seconds=60)
+
+    assert [row["run_id"] for row in payload["runs"]] == ["run_stale"]
+    assert payload["checked"] == 1
+    assert payload["changed"] == 1
+    assert payload["runs"][0]["state_before"] == "running"
+    assert payload["runs"][0]["state_after"] == "failed"
+    assert len(probed) == 1  # the fresh run was not touched
+
+
+def test_reconcile_honours_the_limit(service, monkeypatch):
+    for index in range(3):
+        save_run(
+            service,
+            run_id=f"run_stale_{index}",
+            age=timedelta(minutes=30),
+            with_handle=True,
+        )
+    monkeypatch.setattr(
+        manager_module, "build_executor", lambda *a, **k: _Finished("plain failure\n")
+    )
+
+    payload = service.reconcile_runs(limit=2, older_than_seconds=60)
+
+    assert payload["checked"] == 2
+
+
+def test_unmatched_failure_records_the_last_log_line(service, monkeypatch):
+    save_run(service, age=timedelta(minutes=30), with_handle=True)
+    monkeypatch.setattr(
+        manager_module,
+        "build_executor",
+        lambda *a, **k: _Finished("step 1 ok\n\n  ValueError: something specific  \n"),
+    )
+
+    service.runs.refresh("run_observed")
+    payload = service.get_run("run_observed", refresh=False)
+
+    diagnosis = payload["diagnosis"]
+    assert diagnosis["data"]["unmatched"] is True
+    assert "no known failure pattern" in diagnosis["message"]
+    assert "ValueError: something specific" in diagnosis["message"]
+
+
+def test_known_failure_pattern_wins_over_the_fallback(service, monkeypatch):
+    save_run(service, age=timedelta(minutes=30), with_handle=True)
+    monkeypatch.setattr(
+        manager_module,
+        "build_executor",
+        lambda *a, **k: _Finished("Traceback...\nModuleNotFoundError: No module named 'numpy'\n"),
+    )
+
+    service.runs.refresh("run_observed")
+    diagnosis = service.get_run("run_observed", refresh=False)["diagnosis"]
+
+    assert diagnosis["message"].startswith("No module named")
+    assert "unmatched" not in diagnosis["data"]

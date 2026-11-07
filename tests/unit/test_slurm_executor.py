@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from rcf.core.errors import SchedulerError
-from rcf.core.models import JobSpec, NodeSpec, PlannedCommand, ResourceRequirements
+from rcf.core.models import JobHandle, JobSpec, NodeSpec, PlannedCommand, ResourceRequirements, RunState
 from rcf.core.runner import CommandResult, ScriptedRunner
 from rcf.executors.slurm_exec import SlurmExecutor
 from rcf.executors.ssh import SshTransport
@@ -80,3 +80,38 @@ def test_real_rejection_is_not_retried():
     with pytest.raises(SchedulerError, match="sbatch failed"):
         executor.submit(job_spec())
     assert len(runner.calls) == 2
+
+
+def _handle(job_id: str) -> JobHandle:
+    return JobHandle(kind="slurm", node_id="hpc", job_id=job_id, workdir="/home/me/rcf/runs/run_1")
+
+
+def test_cancelled_job_reports_the_batch_signal_not_zero(monkeypatch):
+    """A cancelled allocation says ``0:0``; only the batch step has the signal."""
+
+    executor, _ = make_executor([])
+    monkeypatch.setattr(executor, "_read_file", lambda path: None)
+    sacct = (
+        "267660|CANCELLED by 2038|0:0|00:00:14\n"
+        "267660.batch|CANCELLED|0:15|00:00:15\n"
+    )
+    monkeypatch.setattr(executor.transport, "run", lambda *args, **kwargs: ok(sacct))
+
+    status = executor.status(_handle("267660"))
+
+    assert status.state is RunState.CANCELLED
+    assert status.exit_code == 143, "exit 0 would be indistinguishable from a clean finish"
+
+
+def test_cancel_before_start_leaves_the_exit_code_unknown(monkeypatch):
+    """A job killed while pending never ran, so it has no exit code at all."""
+
+    executor, _ = make_executor([])
+    monkeypatch.setattr(executor, "_read_file", lambda path: None)
+    sacct = "267662|CANCELLED by 2038|0:0|00:00:00\n"
+    monkeypatch.setattr(executor.transport, "run", lambda *args, **kwargs: ok(sacct))
+
+    status = executor.status(_handle("267662"))
+
+    assert status.state is RunState.CANCELLED
+    assert status.exit_code is None

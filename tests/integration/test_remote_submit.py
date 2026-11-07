@@ -73,7 +73,9 @@ def test_remote_command_can_be_cancelled(service):
             "project_id": project,
             "node_id": node,
             "command_override": "sleep 300",
-            "requirements": {"cpus": 1, "time_minutes": 10},
+            # Four minutes, not ten: a contract-free project rejects any run over
+            # the short-smoke exemption, and the cancel happens seconds in anyway.
+            "requirements": {"cpus": 1, "time_minutes": 4},
         }
     )
     assert not [check for check in plan["checks"] if check["status"] == "fail"]
@@ -82,7 +84,13 @@ def test_remote_command_can_be_cancelled(service):
     run_id = record["run_id"]
     _wait_for(service, run_id, {"running", "pending", "unknown"}, timeout=60)
 
-    cancelled = service.cancel_run(run_id, confirm=True)
+    service.cancel_run(run_id, confirm=True)
+    # ``scancel`` is a request: the scheduler may still report RUNNING for a few
+    # seconds while the batch step is signalled.  Poll instead of asserting on a
+    # single observation, or this passes or fails on machine load.
+    cancelled = _wait_for(service, run_id, TERMINAL, timeout=120)
+
     assert cancelled["state"] in {"cancelled", "failed", "lost"}, cancelled
     assert cancelled["state"] != "running"
+    assert any(event["kind"] == "cancelled" for event in cancelled["events"])
     assert run_id not in service.store.active_leases(node).values()

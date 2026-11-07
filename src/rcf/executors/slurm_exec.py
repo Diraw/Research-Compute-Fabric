@@ -332,6 +332,12 @@ class SlurmExecutor(BaseExecutor):
             state = map_slurm_state(job.state)
             if state.terminal:
                 code = parsers.parse_slurm_exit_code(job.exit_code)
+                if state is RunState.CANCELLED:
+                    # The allocation row says ``0:0`` for every cancelled job.
+                    # Only the batch step records the signal that stopped it, and
+                    # a job killed while pending has no batch step at all; in that
+                    # case there is no exit code to report.
+                    code = parsers.parse_sacct_step_exit(sacct.stdout, job_id=job_id)
                 if state is RunState.SUCCEEDED and code not in (0, None):
                     state = RunState.FAILED
                 return JobStatus(

@@ -64,3 +64,23 @@ def test_real_sacct_failed_job_keeps_the_command_not_found_code():
     assert job is not None
     assert job.state == "FAILED"
     assert parsers.parse_slurm_exit_code(job.exit_code) == 127
+
+
+def test_cancelled_job_takes_its_signal_from_the_batch_step():
+    # Captured from a real `scancel` on 2026-11-07: the allocation row reports
+    # 0:0 even though a signal stopped the work.
+    text = (
+        "267660|CANCELLED by 2038|0:0|00:00:14\n"
+        "267660.batch|CANCELLED|0:15|00:00:15\n"
+        "267660.extern|COMPLETED|0:0|00:00:14\n"
+    )
+
+    allocation = parsers.parse_sacct(text, job_id="267660")
+    assert allocation is not None and allocation.exit_code == "0:0"
+    assert parsers.parse_sacct_step_exit(text, job_id="267660") == 143
+
+
+def test_cancelled_before_it_ran_has_no_batch_step():
+    text = "267662|CANCELLED by 2038|0:0|00:00:00\n"
+
+    assert parsers.parse_sacct_step_exit(text, job_id="267662") is None

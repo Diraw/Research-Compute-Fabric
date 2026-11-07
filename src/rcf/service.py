@@ -15,7 +15,7 @@ from typing import Any
 
 from .core.config import Config, default_home
 from .core.errors import Conflict, NotFound, RcfError, UnsupportedOperation
-from .core.ids import new_id, now_utc
+from .core.ids import new_id
 from .core.models import (
     EnvironmentPlan,
     EnvironmentView,
@@ -31,7 +31,7 @@ from .core.runner import Runner, SubprocessRunner
 from .environments.manager import EnvironmentManager
 from .projects.service import ProjectService
 from .resources.inspector import ResourceInspector, gpu_key
-from .runs.manager import RunManager
+from .runs.manager import RunManager, state_age_seconds
 from .runs.planner import RunPlanner
 from .runs.store import Store
 from .security.redaction import redact
@@ -110,15 +110,14 @@ class RcfService:
         stale_after = self.config.settings.runs.stale_after_seconds
         # Age of the *claim*, not of the last attempt: a failed probe refreshes
         # last_observed_at, and using it would make a dead node look healthy.
-        basis = record.state_observed_at or record.submitted_at
-        if basis is None:
+        age = state_age_seconds(record)
+        if age is None:
             # Nothing has claimed anything about a node yet (e.g. a plan that
             # was never submitted): not stale, just unobserved.
             payload["observed_age_seconds"] = None
             payload["stale"] = False
             return payload
-        age = (now_utc() - basis).total_seconds()
-        payload["observed_age_seconds"] = round(max(age, 0.0), 3)
+        payload["observed_age_seconds"] = round(age, 3)
         payload["stale"] = (not record.state.terminal) and age > stale_after
         payload["stale_after_seconds"] = stale_after
         return payload
@@ -560,6 +559,18 @@ class RcfService:
                 self._latest_diagnosis([event.model_dump(mode="json")]) if event else None
             )
         return payloads
+
+    def reconcile_runs(
+        self, *, limit: int = 20, older_than_seconds: int | None = None
+    ) -> dict[str, Any]:
+        """Refresh stale runs and report what the probe changed."""
+
+        rows = self.runs.reconcile(limit=limit, older_than_seconds=older_than_seconds)
+        return {
+            "checked": len(rows),
+            "changed": sum(1 for row in rows if row["changed"]),
+            "runs": rows,
+        }
 
     def get_logs(self, run_id: str, *, tail: int = 200) -> dict[str, Any]:
         text = self.runs.logs(run_id, tail=tail)

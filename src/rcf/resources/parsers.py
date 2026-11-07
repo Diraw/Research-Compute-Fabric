@@ -391,6 +391,25 @@ def parse_sacct(text: str, *, job_id: str | None = None) -> SlurmJob | None:
     return None
 
 
+def parse_sacct_step_exit(text: str, *, job_id: str, step: str = "batch") -> int | None:
+    """Exit status recorded on one step row (``123.batch``), or ``None``.
+
+    A cancelled allocation reports ``0:0`` because the allocation itself ended
+    normally; the signal that actually stopped the work is only on the batch
+    step.  Reading the allocation row alone would record a cancelled run as
+    ``exit 0``, which is indistinguishable from a clean finish.
+    """
+
+    wanted = f"{job_id}.{step}"
+    for line in text.splitlines():
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) < 3 or parts[0] != wanted:
+            continue
+        code = parse_slurm_exit_code(parts[2])
+        return code or None
+    return None
+
+
 def parse_slurm_exit_code(raw: str | None) -> int | None:
     """``0:0`` → 0; ``1:0`` → 1; ``0:15`` → 15 (signal terminated)."""
 

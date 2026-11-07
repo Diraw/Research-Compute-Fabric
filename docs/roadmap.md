@@ -46,7 +46,7 @@
 | integration 骨架 | `tests/integration/` + `-m integration` + 环境变量 gate，默认 skip | 无 |
 | 节点 smoke | 每个授权节点：selftest → env inspect → plan → 60 秒作业 → status → logs → manifest | 授权节点 |
 | Slurm GPU 计算 | 在 Slurm `gpu` 分区跑一次真实 `--gres=gpu:1` 计算作业（不是 probe） | 账户 + 允许提交 |
-| 真实取消 | 真机 `cancel`，核对 `scancel` 回执、终态证据与租约释放 | 授权节点 |
+| 真实取消 | 真机 `cancel`，核对 `scancel` 回执、终态证据与租约释放 | **2026-11-07 已执行**：lab-hpc 上取消运行中作业（job 267660）与排队中作业（job 267662）各一次，均 2 秒内拿到终态与回执，租约释放；第一次暴露「取消后记 exit 0」，修正后取消 job 267664 复验通过 |
 | 真实调度器夹具 | `sinfo`/`sacct` 已脱敏入夹具并修正 `%F` 可用节点语义；`squeue` 待有作业时采集 | 上两项 |
 | 长作业/断线 | ≥30–60 分钟作业、排队、断开重连、`unknown` → 真实状态转换 | 授权节点 |
 | 分区上限 | 计划阶段比对 `MaxTime`（处理 `infinite`）与分区容量 | 真实 `sinfo` |
