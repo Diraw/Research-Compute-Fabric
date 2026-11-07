@@ -8,6 +8,13 @@ behavior, and every entry states the verification boundary.
 
 ### Added
 
+- `partition_time_limit`: the planner now compares the requested walltime with the
+  target partition's `MaxTime` (`sinfo %l`) and fails the plan instead of letting
+  `sbatch` reject the job after it is queued. `infinite` and `PARTITION_LIMIT` are
+  treated as "no bound" and produce no check at all.
+- `parse_slurm_time_limit_minutes` in `resources/parsers.py`: pure parser for every
+  shape Slurm echoes back (`MM`, `MM:SS`, `HH:MM:SS`, `D-HH`, `D-HH:MM`,
+  `D-HH:MM:SS`), returning `None` for the unbounded markers.
 - `compute_get_run` / `rcf run status` now expose the latest structured
   `diagnosis` at the top level, so a caller can answer "why did it fail?"
   without scanning the event list first.
@@ -21,6 +28,13 @@ behavior, and every entry states the verification boundary.
 
 ### Changed
 
+- Plan-time `cpu_capacity` and `memory_capacity` on a Slurm node now use the
+  target partition's per-node `%c` / `%m` instead of the login node's snapshot.
+  The old comparison was wrong in both directions on a real cluster: 64 cores on
+  a 64-core partition was rejected because the login node had 32, while 300 GB
+  was accepted because the login node had 480 GB free and the compute nodes have
+  251 GB. When `sinfo` reports no per-node figure, the login-node fallback now
+  warns and says so instead of blocking.
 - A run submitted with `command_override` is no longer marked
   `contract_violation` when its output directory is empty. The plan already
   warns that an override hides artifact location; the run now records

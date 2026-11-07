@@ -100,6 +100,28 @@ def test_squeue_extracts_gpu_count_and_state():
     assert jobs[1].elapsed == "01:02:03"
 
 
+def test_slurm_time_limit_accepts_every_shape_sinfo_reports():
+    """Slurm echoes ``--time`` back verbatim, in six different shapes."""
+
+    cases = {
+        "90": 90.0,
+        "90:30": 90.5,
+        "1:30:00": 90.0,
+        "2-03": 51 * 60.0,
+        "2-03:30": 51 * 60 + 30.0,
+        "2-03:30:15": 51 * 60 + 30.25,
+    }
+    for raw, expected in cases.items():
+        assert parsers.parse_slurm_time_limit_minutes(raw) == expected, raw
+
+
+def test_slurm_time_limit_does_not_invent_a_bound():
+    """An unlimited or unparsable partition must not become a number."""
+
+    for raw in [None, "", "  ", "infinite", "UNLIMITED", "PARTITION_LIMIT", "N/A", "nonsense"]:
+        assert parsers.parse_slurm_time_limit_minutes(raw) is None, raw
+
+
 def test_sacct_skips_step_rows():
     job = parsers.parse_sacct(SACCT, job_id="1002")
     assert job is not None

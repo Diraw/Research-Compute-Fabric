@@ -234,6 +234,62 @@ def _partition_nodes(field: str) -> tuple[int | None, int | None, int | None]:
     return int(match.group(1)), int(match.group(2)), int(match.group(4))
 
 
+_UNBOUNDED_TIME_LIMITS = {"infinite", "unlimited", "partition_limit", "n/a", "unknown"}
+
+
+def parse_slurm_time_limit_minutes(text: str | None) -> float | None:
+    """``sinfo %l`` → a wall-clock limit in minutes, or ``None`` when unbounded.
+
+    Slurm accepts six shapes for ``--time`` and reports them back verbatim:
+    ``minutes``, ``minutes:seconds``, ``hours:minutes:seconds``, ``days-hours``,
+    ``days-hours:minutes`` and ``days-hours:minutes:seconds``.  A partition can
+    also report ``infinite`` (no limit) or ``PARTITION_LIMIT`` (inherit from the
+    parent partition); both mean "this is not a bound we can enforce", so they
+    return ``None`` instead of a number a caller might compare by accident.
+
+    Fractional minutes are preserved: a ``1:30`` limit is 1.5 minutes, and
+    flooring it to 1 would let a 2-minute request through a 90-second cap.
+    """
+
+    if text is None:
+        return None
+    raw = text.strip()
+    if not raw or raw.lower() in _UNBOUNDED_TIME_LIMITS:
+        return None
+
+    days = 0
+    has_days = False
+    rest = raw
+    day_part, separator, remainder = raw.partition("-")
+    if separator:
+        if not day_part.isdigit():
+            return None
+        days = int(day_part)
+        has_days = True
+        rest = remainder
+
+    fields = rest.split(":")
+    if not 1 <= len(fields) <= 3 or not all(field.isdigit() for field in fields):
+        return None
+    values = [int(field) for field in fields]
+    if has_days:
+        # After ``days-`` Slurm counts in hours, not minutes: ``2-03`` is
+        # two days and three hours, not two days and three minutes.
+        if len(values) == 1:
+            minutes = values[0] * 60.0
+        elif len(values) == 2:
+            minutes = values[0] * 60.0 + values[1]
+        else:
+            minutes = values[0] * 60.0 + values[1] + values[2] / 60
+    elif len(values) == 1:
+        minutes = float(values[0])
+    elif len(values) == 2:
+        minutes = values[0] + values[1] / 60
+    else:
+        minutes = values[0] * 60 + values[1] + values[2] / 60
+    return days * 24 * 60 + minutes
+
+
 def parse_sinfo(text: str) -> list[SlurmPartition]:
     partitions: list[SlurmPartition] = []
     for line in text.splitlines():

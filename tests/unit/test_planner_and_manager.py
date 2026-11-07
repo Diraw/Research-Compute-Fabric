@@ -634,7 +634,15 @@ paths = {{ "laptop" = "{toml_path(project_dir)}" }}
         service.close()
 
 
-def _slurm_service(tmp_path, project_dir):
+def _slurm_service(
+    tmp_path,
+    project_dir,
+    *,
+    partition_cpus=None,
+    partition_memory_mb=None,
+    partition_time_limit=None,
+    login_memory_mb=64000,
+):
     from rcf.core.models import SchedulerView, SlurmPartition
 
     home = make_home(
@@ -661,11 +669,19 @@ paths = {{ "hpc" = "{toml_path(project_dir)}" }}
 """,
     )
     service = RcfService(Config.load(home), runner=SubprocessRunner())
-    snap = snapshot(node_id="hpc")
+    snap = snapshot(node_id="hpc", mem_available=login_memory_mb)
     snap.scheduler = SchedulerView(
         available=True,
         partitions=[
-            SlurmPartition(name="debug", state="up", avl_nodes=2, total_nodes=18),
+            SlurmPartition(
+                name="debug",
+                state="up",
+                avl_nodes=2,
+                total_nodes=18,
+                cpus=partition_cpus,
+                memory_mb=partition_memory_mb,
+                time_limit=partition_time_limit,
+            ),
             SlurmPartition(
                 name="gpu", state="up", avl_nodes=2, total_nodes=2, gres="gpu:RTX3090:8"
             ),
@@ -723,6 +739,101 @@ def test_explicit_partition_is_respected(tmp_path, project_dir):
             }
         )
         assert plan["partition"] == "normal"
+    finally:
+        service.close()
+
+
+def _check(plan, name):
+    return next(check for check in plan["checks"] if check["name"] == name)
+
+
+def test_partition_cpu_capacity_uses_per_node_sinfo_not_the_login_node(tmp_path, project_dir):
+    """The login node has 16 cores; the partition's compute nodes have 64.
+
+    Comparing against the login node rejected a request the compute nodes
+    could satisfy, so ``%c`` from ``sinfo`` is the only valid source.
+    """
+
+    service = _slurm_service(tmp_path, project_dir, partition_cpus=64)
+    try:
+        plan = service.plan_run(
+            {"project_id": "demo", "params": {"seed": 1}, "requirements": {"cpus": 64}}
+        )
+        cpu = _check(plan, "cpu_capacity")
+        assert cpu["status"] == "ok", cpu
+        assert "64 cores/node" in cpu["detail"]
+    finally:
+        service.close()
+
+
+def test_partition_memory_capacity_blocks_a_request_no_compute_node_can_fit(
+    tmp_path, project_dir
+):
+    """492 GB free on the login node says nothing about a 251 GB compute node."""
+
+    service = _slurm_service(
+        tmp_path, project_dir, partition_memory_mb=257437, login_memory_mb=492185
+    )
+    try:
+        plan = service.plan_run(
+            {"project_id": "demo", "params": {"seed": 1}, "requirements": {"memory_gb": 300}}
+        )
+        memory = _check(plan, "memory_capacity")
+        assert memory["status"] == "fail", memory
+        assert "251.4 GB/node" in memory["detail"]
+    finally:
+        service.close()
+
+
+def test_login_node_memory_never_authorizes_a_slurm_request(tmp_path, project_dir):
+    """Without per-node numbers the check must warn, not silently pass."""
+
+    service = _slurm_service(tmp_path, project_dir, login_memory_mb=492185)
+    try:
+        plan = service.plan_run(
+            {"project_id": "demo", "params": {"seed": 1}, "requirements": {"memory_gb": 300}}
+        )
+        memory = _check(plan, "memory_capacity")
+        assert memory["status"] == "warn", memory
+        assert "compute-node capacity unknown" in memory["detail"]
+    finally:
+        service.close()
+
+
+def test_plan_rejects_walltime_beyond_partition_max_time(tmp_path, project_dir):
+    service = _slurm_service(tmp_path, project_dir, partition_time_limit="1:00:00")
+    try:
+        plan = service.plan_run(
+            {"project_id": "demo", "params": {"seed": 1}, "requirements": {"time_minutes": 120}}
+        )
+        walltime = _check(plan, "partition_time_limit")
+        assert walltime["status"] == "fail", walltime
+        assert "120 min" in walltime["detail"] and "60 min" in walltime["detail"]
+    finally:
+        service.close()
+
+
+def test_walltime_within_partition_max_time_is_reported_ok(tmp_path, project_dir):
+    service = _slurm_service(tmp_path, project_dir, partition_time_limit="4:00:00")
+    try:
+        plan = service.plan_run(
+            {"project_id": "demo", "params": {"seed": 1}, "requirements": {"time_minutes": 120}}
+        )
+        walltime = _check(plan, "partition_time_limit")
+        assert walltime["status"] == "ok", walltime
+    finally:
+        service.close()
+
+
+def test_unbounded_partition_reports_no_walltime_check(tmp_path, project_dir):
+    """``infinite`` is not a bound; inventing one would be a false rejection."""
+
+    service = _slurm_service(tmp_path, project_dir, partition_time_limit="infinite")
+    try:
+        plan = service.plan_run(
+            {"project_id": "demo", "params": {"seed": 1}, "requirements": {"time_minutes": 120}}
+        )
+        assert not [c for c in plan["checks"] if c["name"] == "partition_time_limit"]
     finally:
         service.close()
 

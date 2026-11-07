@@ -30,6 +30,7 @@ def test_real_sinfo_preserves_partition_fields():
     assert debug.memory_mb == 257437
     assert debug.gres is None
     assert debug.time_limit == "infinite"
+    assert parsers.parse_slurm_time_limit_minutes(debug.time_limit) is None
 
     gpu = by_name["gpu"]
     assert gpu.avl_nodes == 2
@@ -45,6 +46,7 @@ def test_sinfo_availability_uses_idle_not_total_minus_allocated():
 
     assert partition.total_nodes == 16
     assert partition.avl_nodes == 5
+    assert parsers.parse_slurm_time_limit_minutes(partition.time_limit) == 60.0
 
 
 def test_real_sacct_skips_step_rows_and_reads_the_exit_code():

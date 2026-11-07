@@ -6,9 +6,11 @@
 
 ## 0. 当前基线（2026-11-04）
 
-- 已有跨 Slurm 集群、Linux 工作站、Windows/WSL 与 macOS 的真实运行样本；最长 433 秒。
+- 已有跨 Slurm 集群、Linux 工作站、Windows/WSL 与 macOS 的真实运行样本。按节点分：
+  Slurm 最长 433 秒；SSH 工作站最长 13.98 小时（`run_20261104T165557Z_7d2c4d`，succeeded）。
 - 真实路径已跑过：Slurm CPU、Slurm `gpu` 分区 probe、`srun`/`mpiexec`、SSH、WSL。
-- 真实 run 最长 433 秒；没有长作业、排队或断线恢复样本。
+- Slurm 侧最长 433 秒；没有排队样本（0 个 PENDING 事件），没有断线恢复样本，
+  没有真实 cancel（0 个 cancelled run）。
 - 从未真实执行：`run cancel`、`storage plan/apply`、进度校准；仓库没有 `integration` 测试。
 - 复现元数据按适用 run 统计无丢失：plan 有 git 的 11 个 run、声明 inputs 的 4 个 run，
   全部写入 run 记录；其余 run 的项目本身不是 git 仓库或没有声明 inputs。
@@ -60,7 +62,9 @@
 ### P2.1 提交规范
 
 - `params_schema`：plan 期校验参数类型/范围/必填，避免 `seed=abc` 到运行期才炸。
-- 分区校验：`MaxTime`、CPU/内存容量、GPU `gres` 与请求数。
+- 分区校验：`MaxTime` 与每节点 CPU/内存容量已于 2026-11-06 在 plan 期落地（见
+  `status.md` 的「plan 期资源校验」）；GPU `gres` 数量与请求数的一致性仍待补（现在只检查
+  分区是否报 GPU，具体张数仍交给调度器）。
 - `--tasks` 与 MPI 启动器一致性：单节点多进程、`srun`/`mpiexec` 的 communicator size 核对。
 - 计划过期与幂等：已有实现，补真实设备回归。
 

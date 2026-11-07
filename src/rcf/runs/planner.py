@@ -35,12 +35,14 @@ from ..core.models import (
     ResourceSnapshot,
     RunPlan,
     RunRequest,
+    SlurmPartition,
 )
 from ..core.nodeops import NodeOps
 from ..core.runner import shquote
 from ..environments.manager import EnvironmentManager
 from ..projects.service import ProjectService
 from ..resources.inspector import ResourceInspector, gpu_key
+from ..resources.parsers import parse_slurm_time_limit_minutes
 from ..runs.store import Store
 from ..security.policy import assert_safe_command
 
@@ -285,6 +287,8 @@ class RunPlanner:
                     )
 
         req = request.requirements
+        partition = self._effective_partition(node, req, snapshot)
+        partition_view = self._partition_view(snapshot, partition)
         checks.extend(
             self.inspector.resource_checks(
                 node,
@@ -293,6 +297,7 @@ class RunPlanner:
                 memory_gb=req.memory_gb,
                 gpus=req.gpus,
                 gpu_memory_gb=req.gpu_memory_gb,
+                partition=partition_view,
             )
         )
 
@@ -355,7 +360,6 @@ class RunPlanner:
             )
 
         if node.kind is NodeKind.SLURM and node.slurm:
-            partition = self._effective_partition(node, req, snapshot)
             if not partition:
                 checks.append(
                     Check(
@@ -373,14 +377,16 @@ class RunPlanner:
                     )
                 )
             elif snapshot.scheduler.available and snapshot.scheduler.partitions:
-                known = {p.name for p in snapshot.scheduler.partitions}
                 checks.append(
                     Check(
                         name="partition",
-                        status=ProbeStatus.OK if partition in known else ProbeStatus.WARN,
-                        detail=f"{partition} {'found' if partition in known else 'not reported by sinfo'}",
+                        status=ProbeStatus.OK if partition_view else ProbeStatus.WARN,
+                        detail=f"{partition} {'found' if partition_view else 'not reported by sinfo'}",
                     )
                 )
+                time_check = self._time_limit_check(req, partition_view)
+                if time_check is not None:
+                    checks.append(time_check)
 
         if env_spec is not None:
             view = self.environments.inspect(env_spec, node)
@@ -694,6 +700,49 @@ class RunPlanner:
         if requested:
             return requested
         return project.env_by_node.get(node.id) or project.env_id
+
+    @staticmethod
+    def _partition_view(
+        snapshot: ResourceSnapshot | None, name: str | None
+    ) -> SlurmPartition | None:
+        """The scheduler's own report for the partition a request lands in.
+
+        Declared config only says a partition exists; ``sinfo`` is the only
+        local source for its per-node CPUs, memory and ``MaxTime``.
+        """
+
+        if snapshot is None or not name:
+            return None
+        for partition in snapshot.scheduler.partitions:
+            if partition.name == name:
+                return partition
+        return None
+
+    @staticmethod
+    def _time_limit_check(
+        req: ResourceRequirements, view: SlurmPartition | None
+    ) -> Check | None:
+        """Reject a request longer than the partition's ``MaxTime`` at plan time.
+
+        ``sbatch`` would reject it anyway, but only after the job is queued, and
+        the failure then looks like a scheduler problem instead of a request
+        that never fit.  An unbounded partition has no number to compare, so the
+        check is omitted rather than reported as passing.
+        """
+
+        limit = parse_slurm_time_limit_minutes(view.time_limit) if view else None
+        if view is None or req.time_minutes is None or limit is None:
+            return None
+        fits = req.time_minutes <= limit
+        return Check(
+            name="partition_time_limit",
+            status=ProbeStatus.OK if fits else ProbeStatus.FAIL,
+            detail=(
+                f"{req.time_minutes} min requested; {view.name} allows {limit:g} min (MaxTime)"
+                + ("" if fits else "; the job would be rejected after queuing")
+            ),
+            data={"requested_minutes": req.time_minutes, "limit_minutes": limit},
+        )
 
     @staticmethod
     def _effective_partition(

@@ -21,6 +21,7 @@ from ..core.models import (
     NodeSpec,
     ProbeStatus,
     ResourceSnapshot,
+    SlurmPartition,
 )
 from ..core.nodeops import NodeOps
 from ..core.runner import Runner
@@ -230,37 +231,93 @@ class ResourceInspector:
         gpus: int,
         gpu_memory_gb: int | None,
         disk_kb: int | None = None,
+        partition: SlurmPartition | None = None,
     ) -> list[Check]:
+        """Compare a request against the machine the job will actually run on.
+
+        On Slurm the probe runs on the login node, which is a different machine
+        from the compute node and may be bigger or smaller in both directions.
+        When ``sinfo`` reports per-node ``%c``/``%m`` for the target partition,
+        those are the only numbers that can decide the question; the login-node
+        figures are kept as an explicitly-labelled fallback that can warn but
+        never block.
+        """
+
         checks: list[Check] = []
-        if cpus and snapshot.cpu and snapshot.cpu.logical_cores:
-            ok = snapshot.cpu.logical_cores >= cpus
-            checks.append(
-                Check(
-                    name="cpu_capacity",
-                    status=ProbeStatus.OK if ok else ProbeStatus.FAIL,
-                    detail=f"{snapshot.cpu.logical_cores} logical cores vs {cpus} requested",
-                )
-            )
-            if node.kind is not NodeKind.SLURM and snapshot.cpu.load_1m is not None:
-                headroom = snapshot.cpu.logical_cores - snapshot.cpu.load_1m
+        per_node_cpus = partition.cpus if partition is not None else None
+        per_node_mb = partition.memory_mb if partition is not None else None
+        where = f"{partition.name} partition" if partition is not None else None
+
+        if cpus:
+            capacity = per_node_cpus or (snapshot.cpu.logical_cores if snapshot.cpu else None)
+            if capacity:
+                if where is not None:
+                    detail = f"{where}: {capacity} cores/node vs {cpus} requested"
+                    status = ProbeStatus.OK if capacity >= cpus else ProbeStatus.FAIL
+                elif node.kind is NodeKind.SLURM:
+                    detail = (
+                        f"login node reports {capacity} cores vs {cpus} requested; "
+                        "compute-node capacity unknown"
+                    )
+                    status = ProbeStatus.WARN
+                else:
+                    detail = f"{capacity} logical cores vs {cpus} requested"
+                    status = ProbeStatus.OK if capacity >= cpus else ProbeStatus.FAIL
                 checks.append(
                     Check(
-                        name="cpu_load",
-                        status=ProbeStatus.OK if headroom >= cpus else ProbeStatus.WARN,
-                        detail=f"load1 {snapshot.cpu.load_1m} on {snapshot.cpu.logical_cores} cores",
+                        name="cpu_capacity",
+                        status=status,
+                        detail=detail,
+                        data={"source": where or node.kind.value, "capacity": capacity},
                     )
                 )
-        if memory_gb and snapshot.memory and snapshot.memory.available_mb:
-            available_gb = snapshot.memory.available_mb / 1024
-            ok = available_gb >= memory_gb
-            checks.append(
-                Check(
-                    name="memory_capacity",
-                    status=ProbeStatus.OK if ok else ProbeStatus.FAIL,
-                    detail=f"{available_gb:.1f} GB available vs {memory_gb} GB requested"
-                    + (" (Slurm may allocate beyond current usage)" if node.kind is NodeKind.SLURM else ""),
+            if node.kind is not NodeKind.SLURM and snapshot.cpu and snapshot.cpu.logical_cores:
+                if snapshot.cpu.load_1m is not None:
+                    headroom = snapshot.cpu.logical_cores - snapshot.cpu.load_1m
+                    checks.append(
+                        Check(
+                            name="cpu_load",
+                            status=ProbeStatus.OK if headroom >= cpus else ProbeStatus.WARN,
+                            detail=f"load1 {snapshot.cpu.load_1m} on {snapshot.cpu.logical_cores} cores",
+                        )
+                    )
+        if memory_gb:
+            requested_mb = memory_gb * 1024
+            if per_node_mb:
+                available_gb = per_node_mb / 1024
+                checks.append(
+                    Check(
+                        name="memory_capacity",
+                        status=ProbeStatus.OK if requested_mb <= per_node_mb else ProbeStatus.FAIL,
+                        detail=f"{where}: {available_gb:.1f} GB/node vs {memory_gb} GB requested",
+                        data={"source": where, "capacity_mb": per_node_mb},
+                    )
                 )
-            )
+            elif snapshot.memory and snapshot.memory.available_mb:
+                available_gb = snapshot.memory.available_mb / 1024
+                if node.kind is NodeKind.SLURM:
+                    # The login node's free memory says nothing about a compute
+                    # node; blocking on it would reject valid requests.
+                    checks.append(
+                        Check(
+                            name="memory_capacity",
+                            status=ProbeStatus.WARN,
+                            detail=(
+                                f"login node reports {available_gb:.1f} GB available vs {memory_gb} GB "
+                                "requested; compute-node capacity unknown"
+                            ),
+                            data={"source": "login node", "available_mb": snapshot.memory.available_mb},
+                        )
+                    )
+                else:
+                    checks.append(
+                        Check(
+                            name="memory_capacity",
+                            status=ProbeStatus.OK if available_gb >= memory_gb else ProbeStatus.FAIL,
+                            detail=f"{available_gb:.1f} GB available vs {memory_gb} GB requested",
+                            data={"source": "node", "available_mb": snapshot.memory.available_mb},
+                        )
+                    )
         if gpus:
             if node.kind is NodeKind.SLURM:
                 checks.append(

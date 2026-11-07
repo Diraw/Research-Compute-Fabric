@@ -1,6 +1,9 @@
 # 功能完成度与验收状态
 
 > 更新：2026-11-06。**当前工作树离线集成验收通过**，不是已上传/已发布版本。
+> 2026-11-06 晚追加分区容量与 `MaxTime` 校验（`resources/parsers.py`、
+> `resources/inspector.py`、`runs/planner.py`）。这一笔按操作者要求未运行 pytest，
+> 改用定向脚本覆盖 6 个分支，并在 lab-hpc 上重新 plan 复核；全套离线回归需下一轮重跑。
 > 测试环境：Windows / Python 3.11.14（2026-11-06）；macOS arm64 / Python 3.12.16
 > 是 2026-11-04 的真实节点记录，本轮改动未在 macOS 复跑。
 > 原生 Linux 与远端 GitHub CI 未在本轮执行。
@@ -31,6 +34,7 @@
 | 观测语义（新鲜度、错误生命周期、ssh 诊断） | `runs/manager.py`、`runs/store.py`、`core/runner.py`、`test_observation_truthfulness.py` | 2026-11-04 新增：每次探测确认写 `state_observed_at`，`run list/status` 返回 `observed_age_seconds` 与 `stale`；成功探测清掉旧 `error` 并记 `observe_recovered`；`get_run`/`run status` 顶层暴露最近一条 `diagnosis`，`run list` 也批量返回（单次 SQL，无 N+1）；ssh 255 的 detail 保留 stderr；旧库中 `succeeded` 行的陈旧观测错误一次性清除 |
 | 产物契约语义 | `runs/manager.py`、`test_planner_and_manager.py` | `command_override` 的 run 不再误报 `contract_violation`，改记 `output_contract_unchecked`；`output_contract=none` 记 `output_contract_unmanaged`；真正的空产物仍标记违规 |
 | 复现元数据传递 | `runs/manager.py`、`test_conventions.py`、`test_planner_and_manager.py` | plan 的 git/inputs 完整写入 run；新增 inputs 摘要传递契约测试；未声明 inputs 或非 git 项目保持 warn，不伪造字段 |
+| plan 期资源校验 | `resources/inspector.py`、`runs/planner.py`、`test_parsers.py`、`test_planner_and_manager.py` | 2026-11-06 修正：Slurm 的 `cpu_capacity` / `memory_capacity` 改用目标分区每节点 `%c` / `%m`，不再拿登录节点冒充计算节点（此前 64 核请求被判 fail、300 GB 请求被判 ok）；分区信息缺失时降为 warn 并在 detail 写明 `login node`。新增 `partition_time_limit` 比对 `MaxTime`，`infinite` / `PARTITION_LIMIT` 不当作上限 |
 | 代码同步与内容校验 | `projects/push.py`、`test_push_integrity.py` | 不宣称消除恶意共享目录并发 TOCTOU |
 | 结果回收与存储治理 | `runs/fetch.py`、`storage/`、`test_storage_*.py` | 有界扫描/归属/指纹/守卫；fetch 目标不得与其他 run 的 result/work/run 目录重叠（同物理节点，含本地别名与 macOS 大小写）；保留副本按登记归属验证；不可当通用备份或垃圾回收器 |
 | 进度、ETA、试跑、预算 | `progress/`、`test_progress_*.py`、`test_pilot_*.py` | reporter 是项目证据，不保证工作量或 ETA 真实性/精确性 |
