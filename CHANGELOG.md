@@ -86,6 +86,13 @@ behavior, and every entry states the verification boundary.
 
 ### Tests
 
+- Added `tests/integration/test_long_run.py` and
+  `assets/sleep_heartbeat.py`, gated by `RCF_IT_LONG=1` and at least one hour: it
+  submits a heartbeat job, observes it once, stays deliberately silent longer than
+  the staleness threshold, then asserts that the claim went stale while the job
+  kept running, that one refresh recovers it, and that the lease is released only
+  at the terminal state. Encodes the 2026-11-07 acceptance (66.3 minutes, job
+  267670), but does not run by default.
 - Added `tests/integration/assets/gpu_cuda_smoke.py` and `test_gpu_compute.py`: a
   driver-tier check that loads `libcuda.so.1` through `ctypes`, allocates 64 MiB
   and round-trips bytes inside a real Slurm allocation. No toolkit, no wheel, no

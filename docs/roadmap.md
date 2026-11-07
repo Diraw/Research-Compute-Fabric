@@ -48,7 +48,7 @@
 | Slurm GPU 计算 | 2026-11-07 已执行**驱动级**：真实分配内 `cuCtxCreate` + 64 MiB 显存分配与 H2D/D2H 往返，0 字节差异（job 267665）。CUDA 内核仍未执行，需要 CUDA 版 Python 环境 | 账户 + 允许提交 |
 | 真实取消 | 真机 `cancel`，核对 `scancel` 回执、终态证据与租约释放 | **2026-11-07 已执行**：lab-hpc 上取消运行中作业（job 267660）与排队中作业（job 267662）各一次，均 2 秒内拿到终态与回执，租约释放；第一次暴露「取消后记 exit 0」，修正后取消 job 267664 复验通过 |
 | 真实调度器夹具 | `sinfo`/`sacct` 已脱敏入夹具并修正 `%F` 可用节点语义；`squeue` 非空样本已采集（2026-11-07，含 PENDING 与 `(Resources)` 原因） | 上两项 |
-| 长作业/断线 | ≥30–60 分钟作业、排队、断开重连、`unknown` → 真实状态转换 | 授权节点 |
+| 长作业/断线 | **2026-11-07 已执行**：lab-hpc 上 65 分钟作业（job 267670，实际 66.3 分钟，131 条心跳），中途 14 分钟无观测 → `stale` 为真、作业仍在跑 → 一次刷新恢复，终态 `succeeded`、exit 0、租约释放。已固化在 `tests/integration/test_long_run.py`（`RCF_IT_LONG=1`） | 授权节点 |
 | 分区上限 | 计划阶段比对 `MaxTime`（处理 `infinite`）与分区容量 | 真实 `sinfo` |
 | 连接复用 | 可选 `ControlMaster`/`ControlPersist`，默认关闭，显式开启 | 无 |
 

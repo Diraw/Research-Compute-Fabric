@@ -67,6 +67,7 @@
 | 真实取消（2026-11-07） | lab-hpc，CLI `run plan/submit/cancel`：job 267660（运行中）与 267662（排队中）均在 2 秒内得到终态与 `scancel` 回执；修正退出码后 job 267664（运行中）复验 | **通过**；同时发现并修正「取消后记 exit 0」：现在只取 `.batch` 行的信号，该行尚未落盘时记无退出码，不再伪造 0 |
 | GPU 驱动级（2026-11-07） | lab-hpc `gpu` 分区，job 267665，`tests/integration/assets/gpu_cuda_smoke.py`：`cuInit` → `cuCtxCreate` → 64 MiB `cuMemAlloc` → H2D/D2H 往返 | **通过**；RTX 3090 24259.7 MB，`CUDA_VISIBLE_DEVICES=0`，mismatches 0；不声明 CUDA 内核或数值正确性 |
 | PENDING → RUNNING（2026-11-07） | 3 个 @8 GPU 作业争用 2 节点 `gpu` 分区：第 3 个 16:20:07 提交为 pending → 16:20:46 running（gpu1）→ 16:21:34 succeeded | **通过**；首次拿到真实非空 `squeue` 夹具与排队时长（39 秒） |
+| 长作业 + 观测断线（2026-11-07） | lab-hpc `debug` 分区，job 267670：`sleep_heartbeat.py --seconds 3900`，16:26:44 提交 → 17:33:03 成功（66.3 分钟，exit 0，131 条心跳）；16:26:47 后 14 分钟无观测 | **通过**；`run status --no-refresh` 显示 `running` + `14m STALE`，日志仍在增长；一次 `run reconcile` 恢复为 `running` 并刷新年龄；终态 `succeeded`，`active_leases` 为空，全程无 `observe_failed` |
 | 真实设备 | 私域多节点运行样本（Slurm / SSH / WSL / macOS） | 已有运行证据；公开版本不声明特定站点兼容性；存储清理、进度校准仍待真机验收 |
 
 Windows Bash 用例通过 `tests/bash_support.py` 选择 Git Bash；缺少平台能力的 skip 必须保留
