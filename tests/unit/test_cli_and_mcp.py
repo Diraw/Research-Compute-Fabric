@@ -179,3 +179,15 @@ def read_service_home(home):
     from rcf.core.config import Config
 
     return Config.load(home)
+
+
+def test_cli_report_writes_a_page_and_says_what_it_contains(home, tmp_path):
+    target = tmp_path / "out" / "report.html"
+
+    result = invoke(home, "report", "--out", str(target))
+
+    assert result.exit_code == 0, result.output
+    assert "wrote" in result.output
+    page = target.read_text(encoding="utf-8")
+    assert "<!DOCTYPE html>" in page
+    assert "RCF report" in page

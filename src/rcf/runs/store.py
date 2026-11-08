@@ -373,6 +373,8 @@ class Store:
         limit: int = 50,
         state: RunState | None = None,
         failure_kind: FailureKind | None = None,
+        project_id: str | None = None,
+        created_after: datetime | None = None,
     ) -> list[RunRecord]:
         clauses: list[str] = []
         args: list[object] = []
@@ -382,6 +384,12 @@ class Store:
         if failure_kind is not None:
             clauses.append("failure_kind = ?")
             args.append(failure_kind.value)
+        if project_id is not None:
+            clauses.append("project_id = ?")
+            args.append(project_id)
+        if created_after is not None:
+            clauses.append("created_at >= ?")
+            args.append(iso(created_after))
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = self._all(
             f"SELECT * FROM runs{where} ORDER BY created_at DESC LIMIT ?", (*args, limit)

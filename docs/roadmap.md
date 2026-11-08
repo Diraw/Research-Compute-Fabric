@@ -80,6 +80,8 @@
 - 存储治理：`storage scan/report/check`、`project push` 逐文件回执、两阶段清理
   `storage adopt/plan/apply` 均已有实现；待补真实节点上的 ACL/硬链接/大文件/断网回执验证。
   永久删除始终需要逐次确认。
+- 只读报告：2026-11-08 落地 `rcf report`（单文件 HTML，投影本地库，不提供服务）。
+  页面第一列是失败分类，`domain` 用中性色，未观测状态标 `unverified`。
 - `rcf run diff`：比较两次 run 的参数、环境、输入、产物差异。
 - 可选：每日只读巡检 + 通知；自动删除保持关闭。
 - 配额/项目存储系统对接：读取真实 quota/inode 数据，替代仅按目录统计。

@@ -8,6 +8,15 @@ behavior, and every entry states the verification boundary.
 
 ### Added
 
+- `rcf report [--out report.html] [--project P] [--since 7d] [--limit N]` writes
+  one self-contained HTML page: what is still open, failures grouped by kind with
+  the evidence that produced each verdict, per-project success and duration, and
+  the failed runs themselves. No server, no JavaScript, no external asset, so the
+  file survives being copied to a machine that cannot reach anything.
+  Two rules carry over from the CLI: a state that was not re-observed is labelled
+  `unverified <age>` rather than shown as healthy, and a failure with no recorded
+  kind is shown as `unknown` rather than left blank.
+
 - `rcf run reconcile --older-than-minutes 30 --limit 20` re-probes runs whose
   state claim has gone stale and reports what changed. Nothing polls in the
   background by design; this is the bounded "someone asks" that was missing, and

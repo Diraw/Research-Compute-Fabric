@@ -8,14 +8,16 @@ this one object, so an Agent and a human cannot drift apart.
 from __future__ import annotations
 
 import platform
+import re
 import shutil
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from .core.config import Config, default_home
-from .core.errors import Conflict, NotFound, RcfError, UnsupportedOperation
-from .core.ids import new_id
+from .core.errors import Conflict, NotFound, RcfError, SpecError, UnsupportedOperation
+from .core.ids import new_id, now_utc
 from .core.models import (
     EnvironmentPlan,
     EnvironmentView,
@@ -36,6 +38,45 @@ from .runs.manager import RunManager, state_age_seconds
 from .runs.planner import RunPlanner
 from .runs.store import Store
 from .security.redaction import redact
+
+#: Display order for failure groups: the category that needs no fix first.
+_KIND_ORDER = ("domain", "environment", "input", "parameter", "code", "unknown")
+
+_TERMINAL_STATES = {"succeeded", "failed", "cancelled", "lost"}
+
+_SINCE_UNITS = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
+
+
+def parse_since(value: str | None) -> int | None:
+    """Turn ``7d`` / ``24h`` into seconds, refusing anything ambiguous."""
+
+    if not value:
+        return None
+    match = re.fullmatch(r"(\d+)([mhdw])", value.strip().lower())
+    if match is None:
+        raise SpecError(
+            f"cannot read {value!r} as a time window",
+            hint="use a number and a unit: 90m, 24h, 7d, 2w",
+            detail={"value": value},
+        )
+    return int(match.group(1)) * _SINCE_UNITS[match.group(2)]
+
+
+def _is_terminal(state: str) -> bool:
+    return state in _TERMINAL_STATES
+
+
+def _wall_seconds(start: str | None, end: str | None) -> float | None:
+    """Wall clock between two stored timestamps, never negative."""
+
+    if not start or not end:
+        return None
+    try:
+        began = datetime.fromisoformat(start)
+        stopped = datetime.fromisoformat(end)
+    except ValueError:
+        return None
+    return max(0.0, (stopped - began).total_seconds())
 
 
 class RcfService:
@@ -548,6 +589,100 @@ class RcfService:
         else:
             payload["progress"] = ProgressStore(self.store).latest(run_id)
         return payload
+
+    def build_report(
+        self,
+        *,
+        limit: int = 200,
+        project: str | None = None,
+        since: str | None = None,
+    ) -> dict[str, Any]:
+        """Assemble everything the report needs, once, from the local database.
+
+        ``limit`` bounds how far back the page looks *after* the filters, so
+        ``--project`` on a project that has not run this week still finds its runs
+        instead of scanning the newest N overall and finding nothing.
+        """
+
+        since_seconds = parse_since(since)
+        cutoff = now_utc() - timedelta(seconds=since_seconds) if since_seconds else None
+        records = self.store.list_runs(
+            limit=limit, project_id=project, created_after=cutoff
+        )
+        payloads = [self._run_payload(record) for record in records]
+        ids = [record.run_id for record in records]
+        diagnoses = self.store.latest_events(ids, "diagnosis")
+        # A run classified after the fact has a ``classified`` event instead of a
+        # diagnosis written at failure time; both are evidence, and leaving the
+        # older runs blank would read as "nothing was ever concluded".
+        classified = self.store.latest_events(ids, "classified")
+        for payload in payloads:
+            event = diagnoses.get(payload["run_id"]) or classified.get(payload["run_id"])
+            payload["evidence"] = event.message[:180] if event is not None else None
+
+        failed = [payload for payload in payloads if payload["state"] == "failed"]
+        groups = []
+        for kind in _KIND_ORDER:
+            # A failure recorded before classification existed has no kind; it is
+            # reported as ``unknown`` rather than dropped from the page.
+            members = [
+                payload for payload in failed if (payload.get("failure_kind") or "unknown") == kind
+            ]
+            if members:
+                groups.append(
+                    {
+                        "kind": kind,
+                        "count": len(members),
+                        "share": len(members) / len(failed) if failed else 0.0,
+                        "runs": members,
+                    }
+                )
+
+        durations: dict[str, list[float]] = {}
+        for payload in payloads:
+            if payload["state"] != "succeeded":
+                continue
+            seconds = _wall_seconds(payload.get("submitted_at"), payload.get("finished_at"))
+            if seconds is not None:
+                durations.setdefault(payload.get("project_id") or "-", []).append(seconds)
+
+        projects = []
+        for project_id in sorted({payload.get("project_id") or "-" for payload in payloads}):
+            members = [p for p in payloads if (p.get("project_id") or "-") == project_id]
+            succeeded = sum(1 for p in members if p["state"] == "succeeded")
+            # Cancellations are a decision, not an attempt that went wrong, so they
+            # stay out of the denominator; otherwise a week of experiments looks
+            # worse the more often the operator changes their mind.
+            finished = [p for p in members if p["state"] in {"succeeded", "failed"}]
+            series = sorted(durations.get(project_id, []))
+            projects.append(
+                {
+                    "project_id": project_id,
+                    "total": len(members),
+                    "succeeded": succeeded,
+                    "failed": sum(1 for p in members if p["state"] == "failed"),
+                    "success_rate": succeeded / len(finished) if finished else 0.0,
+                    "p50_duration_s": series[len(series) // 2] if series else None,
+                    "max_duration_s": series[-1] if series else None,
+                }
+            )
+
+        return {
+            "generated_at": now_utc().isoformat(timespec="seconds"),
+            "home": str(self.config.home),
+            "filters": {"limit": limit, "project": project, "since": since},
+            "counts": {
+                "total": len(payloads),
+                "succeeded": sum(1 for p in payloads if p["state"] == "succeeded"),
+                "failed": len(failed),
+                "cancelled": sum(1 for p in payloads if p["state"] == "cancelled"),
+                "active": sum(1 for p in payloads if not _is_terminal(p["state"])),
+            },
+            "active": [p for p in payloads if not _is_terminal(p["state"])],
+            "failures": groups,
+            "projects": projects,
+            "recent": payloads,
+        }
 
     def list_runs(
         self, *, limit: int = 20, state: str | None = None, failure_kind: str | None = None

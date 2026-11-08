@@ -1152,6 +1152,35 @@ def run_list(
         _emit(state, rows, human)
 
 
+@app.command("report")
+def report(
+    ctx: typer.Context,
+    out: Path = typer.Option(Path("report.html"), "--out", "-o", help="Where to write the page."),
+    limit: int = typer.Option(200, "--limit", help="How many recent runs the page covers."),
+    project: str | None = typer.Option(None, "--project", help="Only this project."),
+    since: str | None = typer.Option(None, "--since", help="Window such as 24h, 7d, 2w."),
+) -> None:
+    """Write a self-contained HTML overview of saved runs.
+
+    Nothing is served and nothing is fetched: the page is a projection of the
+    local database, regenerated on demand, so it cannot show a state that RCF does
+    not actually hold.
+    """
+    state = _state(ctx)
+    from ..report import render_report
+
+    with _errors(state):
+        data = _service(state).build_report(limit=limit, project=project, since=since)
+        target = Path(out)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(render_report(data), encoding="utf-8")
+        counts = data["counts"]
+        typer.echo(
+            f"wrote {target} ({counts['total']} runs: {counts['succeeded']} succeeded, "
+            f"{counts['failed']} failed, {counts['active']} open)"
+        )
+
+
 @run_app.command("classify")
 def run_classify(
     ctx: typer.Context,
