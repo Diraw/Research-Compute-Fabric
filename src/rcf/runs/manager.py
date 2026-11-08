@@ -125,6 +125,7 @@ class RunManager:
         idempotency_key: str | None = None,
         confirmed: bool = False,
         actor: str = "cli",
+        sweep_id: str | None = None,
     ) -> RunRecord:
         self.policy.check("run.submit")
         plan = self.get_plan(plan_id)
@@ -206,6 +207,7 @@ class RunManager:
             idempotency_key=idempotency_key,
             handle=recovery_handle,
             submitted_at=now_utc(),
+            sweep_id=sweep_id,
         )
         from ..storage.ledger import Ledger
         from ..storage.roots import expand_root
@@ -385,9 +387,12 @@ class RunManager:
         limit: int = 50,
         state: RunState | None = None,
         failure_kind: FailureKind | None = None,
+        sweep_id: str | None = None,
     ) -> list[RunRecord]:
         self.policy.check("run.list")
-        return self.store.list_runs(limit=limit, state=state, failure_kind=failure_kind)
+        return self.store.list_runs(
+            limit=limit, state=state, failure_kind=failure_kind, sweep_id=sweep_id
+        )
 
     def reconcile(
         self,

@@ -1029,6 +1029,120 @@ def run_plan(
         _emit(state, _service(state).plan_run(request), human)
 
 
+@run_app.command("sweep")
+def run_sweep(
+    ctx: typer.Context,
+    project_id: str = typer.Option(..., "--project", "-p"),
+    node_id: str | None = typer.Option(None, "--node"),
+    env_id: str | None = typer.Option(None, "--env"),
+    grid: list[str] = typer.Option(
+        [], "--grid", help="Varying parameter: name=v1,v2,v3 (repeatable, cartesian product)."
+    ),
+    param: list[str] = typer.Option([], "--param", help="Fixed parameter: key=value."),
+    gpus: int = typer.Option(0, "--gpus"),
+    cpus: int | None = typer.Option(None, "--cpus"),
+    tasks: int = typer.Option(1, "--tasks", help="MPI ranks (srun/mpirun)."),
+    memory_gb: int | None = typer.Option(None, "--mem", help="System memory in GB."),
+    gpu_memory_gb: int | None = typer.Option(None, "--gpu-mem"),
+    minutes: int | None = typer.Option(None, "--minutes", help="Walltime limit."),
+    partition: str | None = typer.Option(None, "--partition"),
+    command: str | None = typer.Option(None, "--command"),
+    allow_shared_gpu: bool = typer.Option(False, "--allow-shared-gpu"),
+    max_runs: int = typer.Option(200, "--max-runs", help="Refuse grids larger than this."),
+    yes: bool = typer.Option(False, "--yes", help="Submit after planning; without it nothing runs."),
+) -> None:
+    """Plan every combination of a parameter grid, then submit them as one sweep.
+
+    Planning happens for the whole grid before the first submission, so a grid with
+    an impossible point is refused instead of half-run. Without ``--yes`` the plans
+    are printed and nothing is submitted.
+    """
+    state = _state(ctx)
+
+    def human(payload: dict[str, Any]) -> None:
+        if "entries" in payload:
+            typer.echo(
+                f"sweep {payload['sweep_id']}  {payload['combinations']} combination(s)"
+            )
+            names = list(payload["entries"][0]["params"]) if payload["entries"] else []
+            render.table(
+                ["combo", *names, "plan", "checks"],
+                [
+                    [
+                        str(index),
+                        *[str(entry["params"].get(name)) for name in names],
+                        entry["plan_id"],
+                        "blocked: " + ", ".join(entry["blocked_by"])
+                        if entry["blocked_by"]
+                        else "ok",
+                    ]
+                    for index, entry in enumerate(payload["entries"], start=1)
+                ],
+            )
+            if payload["blocked"]:
+                typer.secho("")
+                typer.secho(
+                    f"BLOCKED: {len(payload['blocked'])} combination(s) cannot run; "
+                    "nothing was submitted.",
+                    fg="red",
+                )
+                typer.echo("  fix the request or narrow the grid, then plan again")
+            else:
+                typer.secho("")
+                typer.secho("Every combination is executable.", fg="green")
+                typer.echo("  submit them with the same command plus --yes")
+            return
+        if "submitted" in payload:
+            render.table(
+                ["combo", "run id", "state"],
+                [[str(row["index"]), row["run_id"], row["state"]] for row in payload["submitted"]],
+            )
+            for row in payload["failed"]:
+                typer.secho(f"  combo {row['index']} failed: {row['error']}", fg="red")
+            total = len(payload["submitted"]) + len(payload["failed"])
+            typer.echo(
+                "\n"
+                f"sweep {payload['sweep_id']}: {len(payload['submitted'])}/{total} submitted"
+            )
+            typer.echo(f"  rcf run list --sweep {payload['sweep_id']}")
+            return
+        _emit(state, payload)
+
+    with _errors(state):
+        service = _service(state)
+        grid_values: dict[str, list[Any]] = {}
+        for token in grid:
+            key, sep, raw = token.partition("=")
+            if not sep or not key.strip():
+                raise typer.BadParameter(f"--grid expects name=v1,v2, got {token!r}")
+            grid_values[key.strip()] = [_parse_param(f"x={piece}")[1] for piece in raw.split(",")]
+        request = RunRequest(
+            project_id=project_id,
+            node_id=node_id,
+            env_id=env_id,
+            params=dict(_parse_param(token) for token in param),
+            command_override=command,
+            requirements={
+                "gpus": gpus,
+                "cpus": cpus,
+                "tasks": tasks,
+                "memory_gb": memory_gb,
+                "gpu_memory_gb": gpu_memory_gb,
+                "time_minutes": minutes,
+                "partition": partition,
+                "allow_shared_gpu": allow_shared_gpu,
+            },
+        )
+        plan = service.plan_sweep(request, grid_values, max_runs=max_runs)
+        _emit(state, plan, human)
+        if not yes or state.as_json or plan["blocked"]:
+            return
+        result = service.submit_sweep(
+            plan["sweep_id"], [entry["plan_id"] for entry in plan["entries"]], confirm=True
+        )
+        _emit(state, result, human)
+
+
 @run_app.command("submit")
 def run_submit(
     ctx: typer.Context,
@@ -1078,6 +1192,7 @@ def run_status(
                 ("dirty", payload.get("git_dirty")),
                 ("exit code", payload["exit_code"]),
                 ("verdict", payload.get("failure_kind")),
+                ("sweep", payload.get("sweep_id")),
                 ("created", payload["created_at"]),
                 ("submitted", payload["submitted_at"]),
                 ("finished", payload["finished_at"]),
@@ -1114,6 +1229,7 @@ def run_list(
         "--stale",
         help="Only runs whose state claim is stale (within the newest --limit rows).",
     ),
+    sweep: str | None = typer.Option(None, "--sweep", help="Only runs from this sweep."),
     kind: str | None = typer.Option(
         None,
         "--kind",
@@ -1146,7 +1262,9 @@ def run_list(
         )
 
     with _errors(state):
-        rows = _service(state).list_runs(limit=limit, state=state_filter, failure_kind=kind)
+        rows = _service(state).list_runs(
+            limit=limit, state=state_filter, failure_kind=kind, sweep_id=sweep
+        )
         if stale_only:
             rows = [row for row in rows if row.get("stale")]
         _emit(state, rows, human)

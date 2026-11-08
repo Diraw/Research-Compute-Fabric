@@ -77,7 +77,8 @@ CREATE TABLE IF NOT EXISTS runs (
     git_commit TEXT,
     git_dirty INTEGER NOT NULL DEFAULT 0,
     inputs_json TEXT,
-    failure_kind TEXT
+    failure_kind TEXT,
+    sweep_id TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_runs_idempotency
     ON runs(idempotency_key) WHERE idempotency_key IS NOT NULL;
@@ -183,10 +184,17 @@ class Store:
             "inputs_json": "ALTER TABLE runs ADD COLUMN inputs_json TEXT",
             "state_observed_at": "ALTER TABLE runs ADD COLUMN state_observed_at TEXT",
             "failure_kind": "ALTER TABLE runs ADD COLUMN failure_kind TEXT",
+            "sweep_id": "ALTER TABLE runs ADD COLUMN sweep_id TEXT",
         }
         for column, statement in additions.items():
             if column not in existing:
                 self._conn.execute(statement)
+        # After the column exists: an index in SCHEMA would run before the
+        # migration that adds ``sweep_id`` to an older database.
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_runs_sweep ON runs(sweep_id)"
+            " WHERE sweep_id IS NOT NULL"
+        )
         # Rows written before the error-clearing fix: a *succeeded* run cannot
         # carry a live observation error.  Only that exact, provable case is
         # cleared; failed runs keep their error for diagnosis.  Databases old
@@ -232,12 +240,12 @@ class Store:
                     " submitted_at, finished_at, exit_code, params_json, command_json, workdir, log_path,"
                     " result_dir, env_id, env_fingerprint, handle_json, idempotency_key, error, last_observed_at,"
                     " state_observed_at, contract_violation, git_commit, git_dirty, inputs_json,"
-                    " failure_kind)"
+                    " failure_kind, sweep_id)"
                     " VALUES (:run_id, :plan_id, :project_id, :node_id, :executor, :state, :created_at,"
                     " :submitted_at, :finished_at, :exit_code, :params_json, :command_json, :workdir, :log_path,"
                     " :result_dir, :env_id, :env_fingerprint, :handle_json, :idempotency_key, :error,"
                     " :last_observed_at, :state_observed_at, :contract_violation, :git_commit,"
-                    " :git_dirty, :inputs_json, :failure_kind)",
+                    " :git_dirty, :inputs_json, :failure_kind, :sweep_id)",
                     payload,
                 )
                 self._conn.commit()
@@ -321,7 +329,7 @@ class Store:
                 " last_observed_at=:last_observed_at, state_observed_at=:state_observed_at,"
                 " env_fingerprint=:env_fingerprint,"
                 " contract_violation=:contract_violation, git_commit=:git_commit, git_dirty=:git_dirty,"
-                " inputs_json=:inputs_json, failure_kind=:failure_kind"
+                " inputs_json=:inputs_json, failure_kind=:failure_kind, sweep_id=:sweep_id"
                 " WHERE run_id=:run_id AND state NOT IN ('succeeded','failed','cancelled','lost')",
                 payload,
             )
@@ -375,6 +383,7 @@ class Store:
         failure_kind: FailureKind | None = None,
         project_id: str | None = None,
         created_after: datetime | None = None,
+        sweep_id: str | None = None,
     ) -> list[RunRecord]:
         clauses: list[str] = []
         args: list[object] = []
@@ -390,6 +399,9 @@ class Store:
         if created_after is not None:
             clauses.append("created_at >= ?")
             args.append(iso(created_after))
+        if sweep_id is not None:
+            clauses.append("sweep_id = ?")
+            args.append(sweep_id)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = self._all(
             f"SELECT * FROM runs{where} ORDER BY created_at DESC LIMIT ?", (*args, limit)
@@ -630,6 +642,7 @@ class Store:
             "git_dirty": 1 if record.git_dirty else 0,
             "inputs_json": record.inputs.model_dump_json() if record.inputs else None,
             "failure_kind": record.failure_kind.value if record.failure_kind else None,
+            "sweep_id": record.sweep_id,
         }
 
     @staticmethod
@@ -664,6 +677,7 @@ class Store:
             failure_kind=(
                 FailureKind(row["failure_kind"]) if row["failure_kind"] else None
             ),
+            sweep_id=row["sweep_id"],
         )
 
 

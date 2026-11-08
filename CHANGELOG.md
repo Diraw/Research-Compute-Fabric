@@ -8,6 +8,13 @@ behavior, and every entry states the verification boundary.
 
 ### Added
 
+- `rcf run sweep -p PROJECT --grid seed=1,2,3 [--grid mode=fast,slow]`: plan every
+  combination of a parameter grid, then submit them as one sweep. The whole grid is
+  planned before the first submission, so one impossible point refuses the request
+  instead of half-running it. `--param` supplies the values that stay fixed, a grid
+  above 200 combinations is refused, and without `--yes` nothing is submitted.
+- Runs carry a `sweep_id`, so `rcf run list --sweep <id>` returns exactly the
+  combinations of one request, and `run status` shows which sweep a run belongs to.
 - `rcf report [--out report.html] [--project P] [--since 7d] [--limit N]` writes
   one self-contained HTML page: what is still open, failures grouped by kind with
   the evidence that produced each verdict, per-project success and duration, and

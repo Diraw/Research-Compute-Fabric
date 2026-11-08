@@ -920,6 +920,9 @@ class RunRecord(RuntimeModel):
     #: True when the run finished but left nothing in its output directory,
     #: i.e. the project's artifact contract was not honoured.
     contract_violation: bool = False
+    #: Set when the run came from a sweep, so the combinations of one request can
+    #: be listed together without guessing from timestamps.
+    sweep_id: str | None = None
     #: Why this run failed, when that could be determined from evidence the run
     #: itself left behind.  ``None`` for runs that did not fail, and ``unknown``
     #: when nothing matched, which is a statement rather than a guess.

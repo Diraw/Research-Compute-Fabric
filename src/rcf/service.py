@@ -37,6 +37,7 @@ from .resources.inspector import ResourceInspector, gpu_key
 from .runs.manager import RunManager, state_age_seconds
 from .runs.planner import RunPlanner
 from .runs.store import Store
+from .runs.sweep import expand_grid
 from .security.redaction import redact
 
 #: Display order for failure groups: the category that needs no fix first.
@@ -561,15 +562,92 @@ class RcfService:
         )["warnings"]
         return result
 
+    def plan_sweep(
+        self,
+        request: RunRequest | dict[str, Any],
+        grid: dict[str, list[Any]],
+        *,
+        max_runs: int | None = None,
+    ) -> dict[str, Any]:
+        """Plan every combination of a grid, without submitting any of them.
+
+        Planning first is the whole point: a grid with one impossible point is
+        refused here, before a single job is queued.  The node is probed once —
+        the inspector caches the snapshot — so the cost is the per-combination
+        checks, not the network.
+        """
+
+        combos = expand_grid(grid, **({"max_combos": max_runs} if max_runs else {}))
+        base = request if isinstance(request, RunRequest) else RunRequest.model_validate(request)
+        sweep_id = new_id("sweep")
+        entries = []
+        for combo in combos:
+            merged = {**base.params, **combo}
+            plan = self.plan_run(base.model_copy(update={"params": merged}))
+            blocked_by = [c["name"] for c in plan["checks"] if c["status"] == "fail"]
+            entries.append(
+                {
+                    "params": merged,
+                    "plan_id": plan["plan_id"],
+                    "run_id": plan["run_id"],
+                    "command": plan["command"]["preview"],
+                    "blocked_by": blocked_by,
+                }
+            )
+        return {
+            "sweep_id": sweep_id,
+            "combinations": len(entries),
+            "blocked": [entry for entry in entries if entry["blocked_by"]],
+            "entries": entries,
+        }
+
+    def submit_sweep(
+        self,
+        sweep_id: str,
+        plan_ids: list[str],
+        *,
+        confirm: bool = False,
+    ) -> dict[str, Any]:
+        """Submit planned combinations, reporting each outcome separately.
+
+        A failure halfway through does not roll back the jobs that already started,
+        so the result names both lists rather than pretending the sweep was atomic.
+        """
+
+        submitted: list[dict[str, Any]] = []
+        failed: list[dict[str, Any]] = []
+        for index, plan_id in enumerate(plan_ids, start=1):
+            try:
+                payload = self.submit_run(plan_id, confirm=confirm, sweep_id=sweep_id)
+            except RcfError as exc:
+                failed.append(
+                    {"index": index, "plan_id": plan_id, "error": f"{exc.code}: {exc.message}"}
+                )
+                continue
+            submitted.append(
+                {
+                    "index": index,
+                    "plan_id": plan_id,
+                    "run_id": payload["run_id"],
+                    "state": payload["state"],
+                }
+            )
+        return {"sweep_id": sweep_id, "submitted": submitted, "failed": failed}
+
     def submit_run(
         self,
         plan_id: str,
         *,
         idempotency_key: str | None = None,
         confirm: bool = False,
+        sweep_id: str | None = None,
     ) -> dict[str, Any]:
         record = self.runs.submit(
-            plan_id, idempotency_key=idempotency_key, confirmed=confirm, actor=self.actor
+            plan_id,
+            idempotency_key=idempotency_key,
+            confirmed=confirm,
+            actor=self.actor,
+            sweep_id=sweep_id,
         )
         return self._run_payload(record)
 
@@ -685,11 +763,18 @@ class RcfService:
         }
 
     def list_runs(
-        self, *, limit: int = 20, state: str | None = None, failure_kind: str | None = None
+        self,
+        *,
+        limit: int = 20,
+        state: str | None = None,
+        failure_kind: str | None = None,
+        sweep_id: str | None = None,
     ) -> list[dict[str, Any]]:
         parsed = RunState(state) if state else None
         kind = FailureKind(failure_kind) if failure_kind else None
-        records = self.runs.list(limit=limit, state=parsed, failure_kind=kind)
+        records = self.runs.list(
+            limit=limit, state=parsed, failure_kind=kind, sweep_id=sweep_id
+        )
         payloads = [self._run_payload(record) for record in records]
         diagnoses = self.store.latest_events([record.run_id for record in records], "diagnosis")
         for payload in payloads:
