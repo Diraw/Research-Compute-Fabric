@@ -811,6 +811,9 @@ class FailureKind(StrEnum):
     ENVIRONMENT = "environment"
     #: The arguments the program received were invalid for it.
     PARAMETER = "parameter"
+    #: An input the program needed was absent or lacked a field it expects: the
+    #: upstream stage did not run, or the artifact is older than the code.
+    INPUT = "input"
     #: The program raised inside itself.
     CODE = "code"
     #: No evidence to decide.  Never guessed; historical runs stay here.

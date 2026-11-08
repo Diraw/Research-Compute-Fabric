@@ -235,3 +235,32 @@ def test_a_failing_test_suite_is_reported_as_the_projects_own_failure():
 
     assert verdict.kind is FailureKind.CODE
     assert "own tests" in verdict.detail
+
+
+def test_a_missing_input_file_is_not_a_code_failure():
+    # The upstream stage never produced it; patching the program would not help.
+    tail = (
+        "Traceback (most recent call last):\n"
+        "FileNotFoundError: Stage 2A solver_data.npz not found\n"
+    )
+
+    verdict = classify(tail, exit_code=1)
+
+    assert verdict.kind is FailureKind.INPUT
+    assert "file the program needs is missing" in verdict.detail
+
+
+def test_a_missing_field_in_the_input_data_is_an_input_failure():
+    tail = "Traceback (most recent call last):\nKeyError: 'anchor_pretilt_deg'\n"
+
+    verdict = classify(tail, exit_code=1)
+
+    assert verdict.kind is FailureKind.INPUT
+    assert "anchor_pretilt_deg" in verdict.detail
+
+
+def test_a_key_error_word_in_a_report_does_not_count_as_a_raised_exception():
+    # ``KeyError:`` is the marker; prose that mentions the name is not evidence.
+    tail = '{"notes": "dodged a KeyError, nothing raised"}\n'
+
+    assert classify(tail, exit_code=1).kind is FailureKind.UNKNOWN

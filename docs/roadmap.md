@@ -61,9 +61,9 @@
 
 ### P2.1 提交规范
 
-- 失败分类：2026-11-08 落地 `failure_kind`（domain / environment / parameter /
+- 失败分类：2026-11-08 落地 `failure_kind`（domain / environment / input / parameter /
   code / unknown）与 `rcf run classify`。实测 40 条失败：20 条是仿真按设计拒绝配置，
-  7 条环境、6 条代码、2 条参数、5 条无法判定。后续 `rcf report` 的第一列就是它。
+  7 条环境、3 条输入、3 条代码、2 条参数、5 条无法判定。后续 `rcf report` 的第一列就是它。
 - `params_schema`：plan 期校验参数类型/范围/必填，避免 `seed=abc` 到运行期才炸。
   已有分类显示这类失败只占 2/40，优先级低于批量提交。
 - 分区校验：`MaxTime` 与每节点 CPU/内存容量已于 2026-11-06 在 plan 期落地（见

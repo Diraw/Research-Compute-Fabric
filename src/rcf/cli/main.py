@@ -1117,7 +1117,7 @@ def run_list(
     kind: str | None = typer.Option(
         None,
         "--kind",
-        help="Only runs whose failure was classified as this kind (domain/environment/...).",
+        help="Only runs whose failure was classified as this kind: domain, environment, input, parameter, code, unknown.",
     ),
 ) -> None:
     """List recent runs from the local database.

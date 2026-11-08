@@ -95,7 +95,8 @@ behavior, and every entry states the verification boundary.
 ### Added
 
 - `failure_kind` on every failed run: `domain` (the program finished and
-  rejected the result), `environment`, `parameter`, `code`, or `unknown`. The
+  rejected the result), `environment`, `input` (a needed file is missing or
+  lacks a field), `parameter`, `code`, or `unknown`. The
   scheduler only says "exit 2", which is the same code for a misspelled argument
   and for a solver that finished and said no; the split is derived from the log
   tail and the exit code, and `unknown` is written when nothing matches instead of

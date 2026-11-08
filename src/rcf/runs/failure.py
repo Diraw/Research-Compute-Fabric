@@ -38,6 +38,14 @@ _ENVIRONMENT_MARKERS: tuple[tuple[str, str], ...] = (
     ("GLIBC_", "the node's system libraries are older than this binary requires"),
 )
 
+#: Exceptions that mean "the data was not what the code needs".  A missing file
+#: is an input problem even when the cause is a stale upstream stage, because the
+#: fix is the same: produce the input, do not patch the program.
+_INPUT_EXCEPTIONS: tuple[tuple[str, str], ...] = (
+    ("FileNotFoundError", "a file the program needs is missing"),
+    ("KeyError", "the input data lacks a field the program expects"),
+)
+
 #: Arguments that the program rejected.  These usually arrive as a traceback too,
 #: so they are matched before the generic traceback rule.
 _PARAMETER_MARKERS: tuple[tuple[str, str], ...] = (
@@ -149,6 +157,14 @@ def classify_failure(
                 {"exit_code": exit_code, "pattern": marker},
             )
 
+    for marker, hint in _INPUT_EXCEPTIONS:
+        if _raises(tail, marker):
+            return Verdict(
+                FailureKind.INPUT,
+                f"{label}: {hint} ({last_line[:160]})",
+                {"exit_code": exit_code, "exception": marker},
+            )
+
     if _TEST_SUMMARY.match(last_line):
         return Verdict(
             FailureKind.CODE,
@@ -180,6 +196,16 @@ def classify_failure(
 
 def _contains(tail: str, marker: str) -> bool:
     return marker.lower() in tail.lower()
+
+
+def _raises(tail: str, exception: str) -> bool:
+    """True when the log shows this exception being raised.
+
+    The trailing colon keeps ``KeyError`` from matching a word in a report, and it
+    is how both a traceback's last line and a plain ``print`` of the error look.
+    """
+
+    return f"{exception}:" in tail or f"{exception} :" in tail
 
 
 def _json_objects(lines: list[str]) -> list[dict[str, Any]]:
