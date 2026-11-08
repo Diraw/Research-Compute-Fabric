@@ -24,6 +24,7 @@ from ..core.errors import (
 )
 from ..core.ids import now_utc
 from ..core.models import (
+    FailureKind,
     JobHandle,
     OutputContract,
     ResultManifest,
@@ -37,6 +38,7 @@ from ..core.runner import Runner
 from ..executors.base import Executor
 from ..executors.factory import build_executor
 from ..security.policy import SecurityPolicy
+from .failure import CLASSIFY_TAIL_LINES, Verdict, classify_failure
 from .planner import RunPlanner, job_spec_from_plan
 from .preflight import validate_plan
 from .store import Store
@@ -343,11 +345,18 @@ class RunManager:
         # not be computed from it.
         record.state_observed_at = status.observed_at
         record.last_observed_at = status.observed_at
+        verdict = None
         if status.state.terminal and record.finished_at is None:
             record.finished_at = status.finished_at or status.observed_at
             self._verify_artifacts(record, executor)
             became_terminal = True
             changed = True
+            if status.state in (RunState.FAILED, RunState.LOST):
+                # Classified *before* the terminal row is written: update_run
+                # refuses writes to a terminal record, and this belongs to the
+                # same observation as the failure it describes.
+                verdict = self._failure_verdict(record, executor)
+                record.failure_kind = verdict.kind
         else:
             became_terminal = False
         if changed:
@@ -367,12 +376,18 @@ class RunManager:
             # After the state event, for two reasons: the trail should read
             # cause after effect, and a diagnosis that fails must not cost the
             # state transition that has already been persisted.
-            self._diagnose_failure(record, executor)
+            self._diagnose_failure(record, verdict)
         return record
 
-    def list(self, *, limit: int = 50, state: RunState | None = None) -> list[RunRecord]:
+    def list(
+        self,
+        *,
+        limit: int = 50,
+        state: RunState | None = None,
+        failure_kind: FailureKind | None = None,
+    ) -> list[RunRecord]:
         self.policy.check("run.list")
-        return self.store.list_runs(limit=limit, state=state)
+        return self.store.list_runs(limit=limit, state=state, failure_kind=failure_kind)
 
     def reconcile(
         self,
@@ -415,6 +430,68 @@ class RunManager:
             )
             if len(rows) >= limit:
                 break
+        return rows
+
+    def classify_failed(
+        self, *, limit: int = 40, refresh: bool = False
+    ) -> list[dict[str, object]]:
+        """Classify failures that were recorded before classification existed.
+
+        Nothing polls the past: the state, exit code and timestamps of these runs
+        are left exactly as they were, and the only write is the classification
+        column plus an event that says when it was derived and from what.  That
+        keeps a reader from mistaking yesterday's failure for today's finding.
+        """
+
+        self.policy.check("run.logs")
+        rows: list[dict[str, object]] = []
+        for record in self.store.list_runs(limit=limit, state=RunState.FAILED):
+            previous = record.failure_kind.value if record.failure_kind else None
+            if previous is not None and not refresh:
+                continue
+            tail = ""
+            try:
+                node = self.config.node(record.node_id)
+                executor = build_executor(self.config, node, self.runner)
+                if record.handle is not None:
+                    tail = executor.logs(record.handle, tail=CLASSIFY_TAIL_LINES)
+            except Exception as exc:  # noqa: BLE001 - a dead node must not stop the sweep
+                rows.append(
+                    {
+                        "run_id": record.run_id,
+                        "kind": None,
+                        "detail": f"log unavailable: {str(exc)[:120]}",
+                    }
+                )
+                continue
+            verdict = classify_failure(
+                state=record.state, exit_code=record.exit_code, tail=tail
+            )
+            self.store.set_failure_kind(record.run_id, verdict.kind)
+            evidence: dict[str, object] = {
+                "kind": verdict.kind.value,
+                "exit_code": record.exit_code,
+                "retrospective": True,
+                **{k: v for k, v in verdict.evidence.items() if k != "exit_code"},
+            }
+            if previous is not None and previous != verdict.kind.value:
+                # A better rule re-derived an older verdict: say so instead of
+                # silently rewriting what a reader may already have acted on.
+                evidence["previous"] = previous
+            self._event(
+                record.run_id,
+                "classified",
+                f"{verdict.kind.value}: {verdict.detail}"[:500],
+                evidence,
+            )
+            rows.append(
+                {
+                    "run_id": record.run_id,
+                    "kind": verdict.kind.value,
+                    "previous": previous,
+                    "detail": verdict.detail,
+                }
+            )
         return rows
 
     def events(self, run_id: str, *, limit: int = 100) -> list[RunEvent]:
@@ -531,67 +608,37 @@ class RunManager:
         )
 
     # -- internals ---------------------------------------------------------- #
-    #: Failure patterns that an Agent (or a human) should not have to guess.
-    FAILURE_HINTS: tuple[tuple[str, str], ...] = (
-        ("command not found", "the command is not on PATH in the job environment"),
-        ("No module named", "a Python package is missing from this environment"),
-        ("ModuleNotFoundError", "a Python package is missing from this environment"),
-        ("Permission denied", "the job cannot read/write the path it needs"),
-        ("cannot open shared object file", "a compiled library is missing from the environment"),
-        ("Segmentation fault", "the program crashed (see the log for the failing step)"),
-    )
+    def _failure_verdict(self, record: RunRecord, executor: Executor) -> Verdict:
+        """Classify the failure from the log the job already wrote.
 
-    def _diagnose_failure(self, record: RunRecord, executor: Executor) -> None:
-        """Turn 'exit code 127' into 'the command is not on PATH'."""
+        Reading the log is the only part that can fail, and a failure to read it
+        must not cost the state transition: that yields ``unknown``, which is the
+        truth ("no evidence"), not a guess.
+        """
 
-        exit_code = record.exit_code
-        if exit_code == 137:
-            self._event(
-                record.run_id,
-                "diagnosis",
-                "exit 137: killed (out of memory, or walltime limit reached)",
-                {"exit_code": exit_code},
-            )
-            return
         try:
-            tail = executor.logs(record.handle, tail=40) if record.handle else ""
-        except Exception:  # noqa: BLE001 - diagnosis must never fail the refresh
-            tail = ""
-        for pattern, hint in self.FAILURE_HINTS:
-            if pattern.lower() in tail.lower():
-                self._event(
-                    record.run_id,
-                    "diagnosis",
-                    f"{pattern}: {hint}",
-                    {"exit_code": exit_code, "pattern": pattern},
-                )
-                return
-        if exit_code == 127:
-            self._event(
-                record.run_id,
-                "diagnosis",
-                "exit 127: interpreter or command not found in the job environment",
-                {"exit_code": exit_code},
+            tail = (
+                executor.logs(record.handle, tail=CLASSIFY_TAIL_LINES)
+                if record.handle
+                else ""
             )
-            return
+        except Exception:  # noqa: BLE001 - classification must never fail the refresh
+            return Verdict(
+                FailureKind.UNKNOWN,
+                "no exit code evidence: the log could not be read",
+                {"log_unavailable": True},
+            )
+        return classify_failure(state=record.state, exit_code=record.exit_code, tail=tail)
 
-        # Nothing matched.  Returning silently leaves the reader with an exit code
-        # and a multi-kilobyte log to grep; the last non-empty line is the cheapest
-        # evidence actually available.  Labelling it ``no known failure pattern``
-        # keeps a hint from being mistaken for a conclusion.
-        last_line = next(
-            (line.strip() for line in reversed(tail.splitlines()) if line.strip()), ""
-        )
-        code_label = f"exit {exit_code}" if exit_code is not None else "no exit code"
-        detail = f"{code_label}: no known failure pattern"
-        if last_line:
-            detail = f"{detail}; last log line: {last_line[:200]}"
-        self._event(
-            record.run_id,
-            "diagnosis",
-            detail,
-            {"exit_code": exit_code, "unmatched": True},
-        )
+    def _diagnose_failure(self, record: RunRecord, verdict: Verdict | None) -> None:
+        """Write the classification as one event a reader can act on."""
+
+        if verdict is None:
+            verdict = classify_failure(state=record.state, exit_code=record.exit_code, tail="")
+        data = dict(verdict.evidence)
+        data["kind"] = verdict.kind.value
+        data.setdefault("exit_code", record.exit_code)
+        self._event(record.run_id, "diagnosis", verdict.detail[:600], data)
 
     def _verify_artifacts(self, record: RunRecord, executor: Executor) -> None:
         """Close the loop on the artifact contract.

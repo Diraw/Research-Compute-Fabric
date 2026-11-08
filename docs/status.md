@@ -33,6 +33,7 @@
 | CLI / MCP | `cli/main.py`、`mcp/server.py`、`test_cli_and_mcp.py` | 工具数量与入口以当前 `rcf mcp tools` 为准 |
 | 提交、租约与不确定状态 | `runs/`、`test_submission_safety.py`、`test_submission_preflight.py` | unknown 不等于失败；先恢复核查再考虑新计划 |
 | 观测语义（新鲜度、错误生命周期、ssh 诊断） | `runs/manager.py`、`runs/store.py`、`core/runner.py`、`test_observation_truthfulness.py` | 2026-11-04 新增：每次探测确认写 `state_observed_at`，`run list/status` 返回 `observed_age_seconds` 与 `stale`；成功探测清掉旧 `error` 并记 `observe_recovered`；`get_run`/`run status` 顶层暴露最近一条 `diagnosis`，`run list` 也批量返回（单次 SQL，无 N+1）；ssh 255 的 detail 保留 stderr；旧库中 `succeeded` 行的陈旧观测错误一次性清除。2026-11-07 追加：`rcf run reconcile` 按 `--older-than-minutes` 重新探测陈旧的未终态 run（`--limit` 限流，CLI-only）；无匹配模式的失败记 `exit N: no known failure pattern; last log line: ...`，不再留空 |
+| 失败分类（谁是责任方） | `runs/failure.py`、`runs/manager.py`、`test_failure_classification.py` | 2026-11-08 新增：终态时按日志与退出码判 `domain` / `environment` / `parameter` / `code` / `unknown`，写入 run 的 `failure_kind` 列；`run list --kind` 可筛，`run status` 显示 `verdict`，事件 data 带 `kind`。规则只看证据：结构化 verdict JSON、缺失模块/命令/GLIBC、参数被拒、traceback、测试套件汇总；都没有就是 `unknown`，不猜。历史 run 用 `rcf run classify` 从节点上仍存在的日志补判，事件标 `retrospective: true`，状态与时间戳一律不动 |
 | 产物契约语义 | `runs/manager.py`、`test_planner_and_manager.py` | `command_override` 的 run 不再误报 `contract_violation`，改记 `output_contract_unchecked`；`output_contract=none` 记 `output_contract_unmanaged`；真正的空产物仍标记违规 |
 | 复现元数据传递 | `runs/manager.py`、`test_conventions.py`、`test_planner_and_manager.py` | plan 的 git/inputs 完整写入 run；新增 inputs 摘要传递契约测试；未声明 inputs 或非 git 项目保持 warn，不伪造字段 |
 | plan 期资源校验 | `resources/inspector.py`、`runs/planner.py`、`test_parsers.py`、`test_planner_and_manager.py` | 2026-11-06 修正：Slurm 的 `cpu_capacity` / `memory_capacity` 改用目标分区每节点 `%c` / `%m`，不再拿登录节点冒充计算节点（此前 64 核请求被判 fail、300 GB 请求被判 ok）；分区信息缺失时降为 warn 并在 detail 写明 `login node`。新增 `partition_time_limit` 比对 `MaxTime`，`infinite` / `PARTITION_LIMIT` 不当作上限 |
@@ -75,6 +76,21 @@ Windows Bash 用例通过 `tests/bash_support.py` 选择 Git Bash；缺少平台
 2026-11-06 的改动只在 Windows 复跑；macOS/Linux 行保留 11-04 证据，不代表本轮代码。
 `test_pilot_workflow.py` 与 `test_runner.py` 断言亚秒/5 秒墙钟终止，CI 将它们单独串行
 执行，避免并行竞争把解释器启动延迟误判成看门狗或超时逻辑失败。
+
+## 3.1 失败分类的实测分布（2026-11-08）
+
+对已有 40 条失败 run 用 `rcf run classify --refresh` 从真实日志补判，结果：
+
+| 类别 | 数量 | 典型证据 |
+| --- | --- | --- |
+| `domain` | 20 | 作业跑完并打印完整 JSON 报告后按设计非零退出（lc3d 物理审计 `accepted=false`） |
+| `environment` | 7 | `No module named`、`command not found`、`GLIBC_2.38 not found` |
+| `code` | 6 | `KeyError: 'anchor_pretilt_deg'`、`TypeError: StructuredP1Sampler.__call__`、测试套件 `1 failed, 69 passed` |
+| `parameter` | 2 | `argument --seed: invalid int value`、`wallSeconds must be <=240` |
+| `unknown` | 5 | 无退出码或日志末尾无判定性证据；保持 `unknown`，不回填猜测 |
+
+结论：「失败率」不能直接当健康度读——一半的失败是仿真按设计拒绝了配置，不是工具或环境故障。
+这条分布也是 `rcf report` 与批量扫描顺序的依据。
 
 ## 4. 通用技术经验与验证边界
 

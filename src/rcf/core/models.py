@@ -794,6 +794,29 @@ class RunPlan(RuntimeModel):
         return not self.blockers
 
 
+class FailureKind(StrEnum):
+    """Why a run failed, in terms of who can fix it.
+
+    ``failed`` alone conflates two incompatible things: the job broke, and the job
+    ran to completion and reported a negative result.  On this profile's own
+    history that split was 6 broken vs 18 rejected out of 40 failures, so a failed
+    run without this distinction is mostly noise.
+    """
+
+    #: The program finished and said the result is not acceptable.  Rerun with a
+    #: different configuration; nothing is broken.
+    DOMAIN = "domain"
+    #: The node or environment is missing something: a package, a binary, a mount,
+    #: memory, permission.
+    ENVIRONMENT = "environment"
+    #: The arguments the program received were invalid for it.
+    PARAMETER = "parameter"
+    #: The program raised inside itself.
+    CODE = "code"
+    #: No evidence to decide.  Never guessed; historical runs stay here.
+    UNKNOWN = "unknown"
+
+
 class RunState(StrEnum):
     PLANNED = "planned"
     SUBMITTING = "submitting"
@@ -894,6 +917,10 @@ class RunRecord(RuntimeModel):
     #: True when the run finished but left nothing in its output directory,
     #: i.e. the project's artifact contract was not honoured.
     contract_violation: bool = False
+    #: Why this run failed, when that could be determined from evidence the run
+    #: itself left behind.  ``None`` for runs that did not fail, and ``unknown``
+    #: when nothing matched, which is a statement rather than a guess.
+    failure_kind: FailureKind | None = None
     last_observed_at: datetime | None = None
     #: When the saved *state* was last confirmed by a successful probe.
     #: ``last_observed_at`` records attempts (including failed ones), so it can

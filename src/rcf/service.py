@@ -19,6 +19,7 @@ from .core.ids import new_id
 from .core.models import (
     EnvironmentPlan,
     EnvironmentView,
+    FailureKind,
     NodeKind,
     NodeSpec,
     ResourceSnapshot,
@@ -548,9 +549,12 @@ class RcfService:
             payload["progress"] = ProgressStore(self.store).latest(run_id)
         return payload
 
-    def list_runs(self, *, limit: int = 20, state: str | None = None) -> list[dict[str, Any]]:
+    def list_runs(
+        self, *, limit: int = 20, state: str | None = None, failure_kind: str | None = None
+    ) -> list[dict[str, Any]]:
         parsed = RunState(state) if state else None
-        records = self.runs.list(limit=limit, state=parsed)
+        kind = FailureKind(failure_kind) if failure_kind else None
+        records = self.runs.list(limit=limit, state=parsed, failure_kind=kind)
         payloads = [self._run_payload(record) for record in records]
         diagnoses = self.store.latest_events([record.run_id for record in records], "diagnosis")
         for payload in payloads:
@@ -559,6 +563,13 @@ class RcfService:
                 self._latest_diagnosis([event.model_dump(mode="json")]) if event else None
             )
         return payloads
+
+    def classify_failed(
+        self, *, limit: int = 40, refresh: bool = False
+    ) -> list[dict[str, Any]]:
+        """Classify older failures from logs that are still on the nodes."""
+
+        return self.runs.classify_failed(limit=limit, refresh=refresh)
 
     def reconcile_runs(
         self, *, limit: int = 20, older_than_seconds: int | None = None

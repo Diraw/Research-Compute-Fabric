@@ -92,6 +92,23 @@ behavior, and every entry states the verification boundary.
   SQLite database and starter configuration files 0600. Windows ACLs are
   unchanged; a user-supplied `RCF_HOME` directory itself is never chmodded.
 
+### Added
+
+- `failure_kind` on every failed run: `domain` (the program finished and
+  rejected the result), `environment`, `parameter`, `code`, or `unknown`. The
+  scheduler only says "exit 2", which is the same code for a misspelled argument
+  and for a solver that finished and said no; the split is derived from the log
+  tail and the exit code, and `unknown` is written when nothing matches instead of
+  guessing. `run list --kind` filters, `run status` shows a `verdict` line, and the
+  diagnosis event carries `kind`.
+- `rcf run classify` derives the kind for runs recorded before this existed, from
+  the logs still on the nodes. It writes only that column: the state, exit code and
+  timestamps are untouched, and the event is marked `retrospective: true` so a
+  reader can tell a re-derived verdict from one recorded at failure time.
+- `tests/unit/test_failure_classification.py`, including the log shapes that
+  justify each rule (pretty-printed verdict JSON, glibc mismatch, argparse
+  rejection, a failing pytest summary).
+
 ### Tests
 
 - Added `tests/integration/test_long_run.py` and

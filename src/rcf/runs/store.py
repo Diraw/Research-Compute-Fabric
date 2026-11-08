@@ -23,6 +23,7 @@ from typing import Any
 from ..core.errors import Conflict, StoreError
 from ..core.ids import iso, now_utc, parse_iso
 from ..core.models import (
+    FailureKind,
     InputManifest,
     JobHandle,
     PlannedCommand,
@@ -75,7 +76,8 @@ CREATE TABLE IF NOT EXISTS runs (
     contract_violation INTEGER NOT NULL DEFAULT 0,
     git_commit TEXT,
     git_dirty INTEGER NOT NULL DEFAULT 0,
-    inputs_json TEXT
+    inputs_json TEXT,
+    failure_kind TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_runs_idempotency
     ON runs(idempotency_key) WHERE idempotency_key IS NOT NULL;
@@ -180,6 +182,7 @@ class Store:
             "git_dirty": "ALTER TABLE runs ADD COLUMN git_dirty INTEGER NOT NULL DEFAULT 0",
             "inputs_json": "ALTER TABLE runs ADD COLUMN inputs_json TEXT",
             "state_observed_at": "ALTER TABLE runs ADD COLUMN state_observed_at TEXT",
+            "failure_kind": "ALTER TABLE runs ADD COLUMN failure_kind TEXT",
         }
         for column, statement in additions.items():
             if column not in existing:
@@ -228,11 +231,13 @@ class Store:
                     "INSERT INTO runs(run_id, plan_id, project_id, node_id, executor, state, created_at,"
                     " submitted_at, finished_at, exit_code, params_json, command_json, workdir, log_path,"
                     " result_dir, env_id, env_fingerprint, handle_json, idempotency_key, error, last_observed_at,"
-                    " state_observed_at, contract_violation, git_commit, git_dirty, inputs_json)"
+                    " state_observed_at, contract_violation, git_commit, git_dirty, inputs_json,"
+                    " failure_kind)"
                     " VALUES (:run_id, :plan_id, :project_id, :node_id, :executor, :state, :created_at,"
                     " :submitted_at, :finished_at, :exit_code, :params_json, :command_json, :workdir, :log_path,"
                     " :result_dir, :env_id, :env_fingerprint, :handle_json, :idempotency_key, :error,"
-                    " :last_observed_at, :state_observed_at, :contract_violation, :git_commit, :git_dirty, :inputs_json)",
+                    " :last_observed_at, :state_observed_at, :contract_violation, :git_commit,"
+                    " :git_dirty, :inputs_json, :failure_kind)",
                     payload,
                 )
                 self._conn.commit()
@@ -316,7 +321,7 @@ class Store:
                 " last_observed_at=:last_observed_at, state_observed_at=:state_observed_at,"
                 " env_fingerprint=:env_fingerprint,"
                 " contract_violation=:contract_violation, git_commit=:git_commit, git_dirty=:git_dirty,"
-                " inputs_json=:inputs_json"
+                " inputs_json=:inputs_json, failure_kind=:failure_kind"
                 " WHERE run_id=:run_id AND state NOT IN ('succeeded','failed','cancelled','lost')",
                 payload,
             )
@@ -328,6 +333,20 @@ class Store:
                 )
             self._conn.commit()
             return saved
+
+    def set_failure_kind(self, run_id: str, kind: FailureKind) -> None:
+        """Write one derived column on a terminal run.
+
+        ``update_run`` refuses terminal rows on purpose: a persisted outcome must
+        not regress.  This is not a state change, only a classification of the
+        failure that is already recorded, so it is a separate, single-column write.
+        """
+
+        with self._lock:
+            self._conn.execute(
+                "UPDATE runs SET failure_kind=? WHERE run_id=?", (kind.value, run_id)
+            )
+            self._conn.commit()
 
     def record_observation_error(self, run_id: str, error: str) -> None:
         """An unsuccessful probe changes metadata, never the saved run state."""
@@ -348,14 +367,25 @@ class Store:
         row = self._one("SELECT * FROM runs WHERE idempotency_key = ?", (key,))
         return self._to_record(row) if row else None
 
-    def list_runs(self, *, limit: int = 50, state: RunState | None = None) -> list[RunRecord]:
-        if state is None:
-            rows = self._all("SELECT * FROM runs ORDER BY created_at DESC LIMIT ?", (limit,))
-        else:
-            rows = self._all(
-                "SELECT * FROM runs WHERE state = ? ORDER BY created_at DESC LIMIT ?",
-                (state.value, limit),
-            )
+    def list_runs(
+        self,
+        *,
+        limit: int = 50,
+        state: RunState | None = None,
+        failure_kind: FailureKind | None = None,
+    ) -> list[RunRecord]:
+        clauses: list[str] = []
+        args: list[object] = []
+        if state is not None:
+            clauses.append("state = ?")
+            args.append(state.value)
+        if failure_kind is not None:
+            clauses.append("failure_kind = ?")
+            args.append(failure_kind.value)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = self._all(
+            f"SELECT * FROM runs{where} ORDER BY created_at DESC LIMIT ?", (*args, limit)
+        )
         return [self._to_record(row) for row in rows]
 
     def active_runs(self) -> list[RunRecord]:
@@ -591,6 +621,7 @@ class Store:
             "git_commit": record.git_commit,
             "git_dirty": 1 if record.git_dirty else 0,
             "inputs_json": record.inputs.model_dump_json() if record.inputs else None,
+            "failure_kind": record.failure_kind.value if record.failure_kind else None,
         }
 
     @staticmethod
@@ -622,6 +653,9 @@ class Store:
             git_commit=row["git_commit"],
             git_dirty=bool(row["git_dirty"]),
             inputs=InputManifest.model_validate_json(row["inputs_json"]) if row["inputs_json"] else None,
+            failure_kind=(
+                FailureKind(row["failure_kind"]) if row["failure_kind"] else None
+            ),
         )
 
 

@@ -1077,6 +1077,7 @@ def run_status(
                 ("commit", (payload.get("git_commit") or "")[:12] or None),
                 ("dirty", payload.get("git_dirty")),
                 ("exit code", payload["exit_code"]),
+                ("verdict", payload.get("failure_kind")),
                 ("created", payload["created_at"]),
                 ("submitted", payload["submitted_at"]),
                 ("finished", payload["finished_at"]),
@@ -1113,8 +1114,18 @@ def run_list(
         "--stale",
         help="Only runs whose state claim is stale (within the newest --limit rows).",
     ),
+    kind: str | None = typer.Option(
+        None,
+        "--kind",
+        help="Only runs whose failure was classified as this kind (domain/environment/...).",
+    ),
 ) -> None:
-    """List recent runs from the local database."""
+    """List recent runs from the local database.
+
+    ``failed`` covers two different events: the job broke, and the job finished
+    and reported a negative result.  ``--kind`` separates them; runs recorded
+    before classification existed answer ``unknown`` because that is the truth.
+    """
     state = _state(ctx)
 
     def human(rows: list[dict[str, Any]]) -> None:
@@ -1123,7 +1134,7 @@ def run_list(
             [
                 [
                     r["run_id"],
-                    r["state"],
+                    f"{r['state']} ({r['failure_kind']})" if r.get("failure_kind") else r["state"],
                     _observed_label(r),
                     r["node_id"],
                     r["project_id"] or "-",
@@ -1135,9 +1146,38 @@ def run_list(
         )
 
     with _errors(state):
-        rows = _service(state).list_runs(limit=limit, state=state_filter)
+        rows = _service(state).list_runs(limit=limit, state=state_filter, failure_kind=kind)
         if stale_only:
             rows = [row for row in rows if row.get("stale")]
+        _emit(state, rows, human)
+
+
+@run_app.command("classify")
+def run_classify(
+    ctx: typer.Context,
+    limit: int = typer.Option(40, "--limit"),
+    refresh: bool = typer.Option(
+        False, "--refresh", help="Re-derive runs that already carry a classification."
+    ),
+) -> None:
+    """Classify past failures from the logs still on the nodes.
+
+    Writes only the classification: state, exit code and timestamps are left as
+    they were, and the event says it was derived now rather than at failure time.
+    """
+    state = _state(ctx)
+
+    def human(rows: list[dict[str, Any]]) -> None:
+        if not rows:
+            typer.echo("nothing to classify")
+            return
+        render.table(
+            ["run id", "kind", "evidence"],
+            [[r["run_id"], r["kind"] or "-", str(r["detail"])[:70]] for r in rows],
+        )
+
+    with _errors(state):
+        rows = _service(state).classify_failed(limit=limit, refresh=refresh)
         _emit(state, rows, human)
 
 
