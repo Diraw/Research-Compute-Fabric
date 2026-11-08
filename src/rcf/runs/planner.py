@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import posixpath
+import re
 import shlex
 from pathlib import Path
 
@@ -46,6 +47,14 @@ from ..resources.parsers import parse_slurm_time_limit_minutes
 from ..runs.store import Store
 from ..security.policy import assert_safe_command
 
+_WINDOWS_PATH = re.compile(r"^[A-Za-z]:[\\/]")
+#: Git Bash and MSYS2 mount their own tree at a drive letter, so "/public/x"
+#: reaches a native Windows process as "C:/Program Files/Git/public/x".
+_MSYS_PREFIX = re.compile(
+    r"[A-Za-z]:[\\/](?:program files \(x86\)[\\/]git|program files[\\/]git|msys64|msys32)[\\/]",
+    re.IGNORECASE,
+)
+
 
 def _render_token(token: str, values: dict[str, str], *, where: str) -> str:
     try:
@@ -58,6 +67,89 @@ def _render_token(token: str, values: dict[str, str], *, where: str) -> str:
         ) from None
     except (IndexError, ValueError) as exc:
         raise SpecError(f"{where} is not a valid template: {exc}", detail={"template": token}) from exc
+
+
+def command_path_checks(command: PlannedCommand, node: NodeSpec, *, where: str) -> list[Check]:
+    """Catch Windows paths that a POSIX node cannot use, before they become exit 127.
+
+    Slurm and SSH run the command through ``#!/usr/bin/env bash``, where ``C:/...``
+    is not a program and not a file.  The usual way to write one by accident is Git
+    Bash, which rewrites arguments that look like absolute POSIX paths before a
+    native Windows process sees them; the job then fails with
+    ``line 36: C:/Program: No such file or directory``, which names neither the
+    argument nor the cause.
+
+    The text is scanned *after* it is already split into argv, because the rewrite
+    happened before the split: ``/public/x`` arrived as
+    ``C:/Program Files/Git/public/x`` and shlex turned that into two tokens.
+    Rejoining them is what makes the path recognisable again.
+    """
+
+    if node.kind is NodeKind.LOCAL:
+        return []
+    if command.shell:
+        try:
+            tokens = shlex.split(command.argv[0], posix=True)
+        except ValueError:
+            return []
+    else:
+        tokens = list(command.argv)
+    if not tokens:
+        return []
+
+    text = " ".join(tokens)
+    rewritten = _rewritten_paths(text)
+    executable = tokens[0]
+    if _WINDOWS_PATH.match(executable):
+        suggestion = next((path for offset, _, path in rewritten if offset == 0), None)
+        message = (
+            f"{where} starts with a Windows path ({executable!r}), "
+            f"but {node.id} runs a POSIX shell"
+        )
+        if suggestion:
+            message += (
+                "; Git Bash rewrites absolute POSIX arguments, "
+                f"so this was probably meant to be {suggestion!r}"
+            )
+        raise SpecError(
+            message,
+            hint=(
+                "prefix the command with MSYS_NO_PATHCONV=1 in Git Bash (or set "
+                "MSYS2_ARG_CONV_EXCL='*'), or write the path relative to the project workdir"
+            ),
+            detail={"executable": executable, "node": node.id, "suggested": suggestion},
+        )
+
+    return [
+        Check(
+            name="command_path",
+            status=ProbeStatus.WARN,
+            detail=(
+                f"{where} contains a Git-Bash-rewritten path ({raw!r}); "
+                f"it probably should be {path!r}"
+            ),
+        )
+        for offset, raw, path in rewritten
+        if offset != 0
+    ]
+
+
+def _rewritten_paths(text: str) -> list[tuple[int, str, str]]:
+    """Find MSYS paths that were rewritten before this process saw them.
+
+    Returns ``(offset, as_written, as_meant)``.  The tail stops at the first space,
+    which is right for POSIX paths that do not contain one and still leaves a
+    useful hint when they do.
+    """
+
+    found: list[tuple[int, str, str]] = []
+    for match in _MSYS_PREFIX.finditer(text):
+        tail = text[match.end() :].split(None, 1)[0] if text[match.end() :] else ""
+        if not tail:
+            continue
+        raw = text[match.start() : match.end()] + tail
+        found.append((match.start(), raw, "/" + tail.replace("\\", "/")))
+    return found
 
 
 def build_command(
@@ -581,13 +673,14 @@ class RunPlanner:
 
         req = request.requirements
         partition = self._effective_partition(node, req, snapshot)
+        where = "command_override" if request.command_override else "project.entrypoint"
         command = build_command(
             template=template,
             values=values,
             workdir=project_path,
             env=env_vars,
             preamble=preamble,
-            where="project.entrypoint" if not request.command_override else "command_override",
+            where=where,
         )
         if partition and req.gpus and not req.partition:
             checks.append(
@@ -598,6 +691,7 @@ class RunPlanner:
                 )
             )
         command.preview = command_preview(command)
+        checks.extend(command_path_checks(command, node, where=where))
         assert_safe_command(
             command.preview if not command.shell else " ".join(command.argv), context="run plan"
         )

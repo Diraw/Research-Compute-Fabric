@@ -935,3 +935,64 @@ def test_failure_diagnosis_recognises_oom(svc, project_dir):
 
     diagnoses = [e for e in svc.runs.events(record["run_id"]) if e.kind == "diagnosis"]
     assert diagnoses and "out of memory" in diagnoses[0].message
+
+
+def test_windows_executable_path_is_refused_for_a_posix_node(tmp_path, project_dir):
+    """Git Bash rewrites "/public/x" into "C:/Program Files/Git/public/x".
+
+    Slurm then reports `line 36: C:/Program: No such file or directory`, which
+    names neither the argument nor the cause. Refuse the plan instead.
+    """
+
+    from rcf.core.errors import SpecError
+
+    service = _slurm_service(tmp_path, project_dir)
+    try:
+        mangled = "C:/Program Files/Git/public/home/me/rcf/bin/python3"
+        with pytest.raises(SpecError) as caught:
+            service.plan_run(
+                {
+                    "project_id": "demo",
+                    "params": {"seed": 1},
+                    "command_override": f"{mangled} train.py --seed 1",
+                }
+            )
+        error = caught.value
+        assert error.code == "spec_invalid"
+        assert "POSIX shell" in error.message
+        assert error.detail["suggested"] == "/public/home/me/rcf/bin/python3"
+        assert "MSYS_NO_PATHCONV=1" in error.hint
+    finally:
+        service.close()
+
+
+def test_windows_argument_path_warns_instead_of_blocking(tmp_path, project_dir):
+    """A mangled *argument* is not fatal: the job may still be intentional."""
+
+    service = _slurm_service(tmp_path, project_dir)
+    try:
+        plan = service.plan_run(
+            {
+                "project_id": "demo",
+                "params": {"seed": 1},
+                "command_override": "{python} C:/Program Files/Git/public/home/me/x.py",
+            }
+        )
+        warns = [c for c in plan["checks"] if c["name"] == "command_path"]
+        assert len(warns) == 1
+        assert warns[0]["status"] == "warn"
+        assert "/public/home/me/x.py" in warns[0]["detail"]
+        assert not [c for c in plan["checks"] if c["status"] == "fail"]
+    finally:
+        service.close()
+
+
+def test_local_node_may_name_a_windows_executable():
+    """A local node on Windows runs argv directly, so a drive path is legitimate."""
+
+    from rcf.core.models import NodeKind, NodeSpec, PlannedCommand
+    from rcf.runs.planner import command_path_checks
+
+    command = PlannedCommand(argv=["C:/tools/python.exe", "run.py"], workdir="C:/proj")
+    local = NodeSpec(id="laptop", kind=NodeKind.LOCAL)
+    assert command_path_checks(command, local, where="entrypoint") == []

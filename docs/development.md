@@ -192,7 +192,33 @@ output 必须是新目录，不允许覆盖已有 output 目录。当前运行�
 - 回归测试：`tests/unit/test_runner.py`（断言 flag）与
   `tests/e2e/test_no_console_window.py`（真实跑一个作业，断言 `GetConsoleWindow() == 0`）。
 
-## 8. 不要做的事
+## 8. Windows shell 会改写命令行里的绝对路径
+
+在 Git Bash / MSYS2 里调用 `rcf`（native Windows 进程）时，**参数中看起来像绝对 POSIX 路径的词
+会在进入 RCF 之前被改写成 Windows 路径**：
+
+```text
+--command "/public/home/me/env/bin/python3 run.py"
+```
+
+RCF 实际收到的是 `C:/Program Files/Git/public/home/me/env/bin/python3 run.py`，Slurm 侧表现为：
+
+```text
+slurm_script: line 36: C:/Program: No such file or directory
+```
+
+exit 127 说“解释器找不到”，但真正的原因是路径在到达远端之前就变了。三条对策：
+
+- 命令前加 `MSYS_NO_PATHCONV=1`（或 `MSYS2_ARG_CONV_EXCL='*'`）环境变量；
+- 用相对项目 workdir 的路径（`../rcf-hello/x.py`），没有前导斜杠就不会被改写；
+- 只在必须写绝对路径时用前两条之一。
+
+RCF 现在会在 `plan` 阶段拦下这种命令：可执行文件位置出现 `C:/…` 且节点是 POSIX 时直接
+`spec_invalid`，并把还原后的路径写在提示里；其余位置的改写降为 `command_path` 警告
+（`command_path_checks`，见 `src/rcf/runs/planner.py`）。本地节点不受影响——Windows 上
+`kind = "local"` 直接按 argv 执行，`C:/tools/python.exe` 是合法值。
+
+## 9. 不要做的事
 
 - 不要为了让 demo 好看而伪造真实集群结果。
 - 不要在未授权的情况下连接真实设备、安装依赖、提交真实计算。

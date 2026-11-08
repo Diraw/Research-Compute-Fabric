@@ -62,6 +62,14 @@ behavior, and every entry states the verification boundary.
 
 ### Fixed
 
+- A command whose executable is a Windows path is refused at plan time for
+  Slurm and SSH nodes. Git Bash rewrites `/public/x` into
+  `C:/Program Files/Git/public/x` before RCF sees the argument, and shlex then
+  splits that at the space, so the job died with `line 36: C:/Program: No such
+  file or directory`. The error now names the rewritten path, recovers the
+  intended one, and points at `MSYS_NO_PATHCONV=1`; a rewritten path anywhere
+  else in the command becomes a `command_path` warning instead of a failure.
+  Local nodes are unaffected: they run argv directly.
 - A cancelled Slurm run no longer records `exit code 0`. `sacct` reports `0:0`
   for the allocation row of every cancelled job, so the old code could not tell a
   cancelled run from a clean finish. The exit code now comes from the `.batch`
