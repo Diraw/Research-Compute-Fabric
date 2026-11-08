@@ -191,3 +191,37 @@ def test_cli_report_writes_a_page_and_says_what_it_contains(home, tmp_path):
     page = target.read_text(encoding="utf-8")
     assert "<!DOCTYPE html>" in page
     assert "RCF report" in page
+
+
+def test_cli_diff_reports_what_changed_between_two_runs(home):
+    from rcf.core.config import Config
+    from rcf.core.ids import now_utc
+    from rcf.core.models import PlannedCommand, RunRecord, RunState
+
+    service = RcfService(Config.load(home), actor="test")
+    try:
+        for run_id, seed in (("run_before", 1), ("run_after", 2)):
+            service.store.insert_run(
+                RunRecord(
+                    run_id=run_id,
+                    node_id="laptop",
+                    executor="local",
+                    project_id="demo",
+                    state=RunState.SUCCEEDED,
+                    created_at=now_utc(),
+                    submitted_at=now_utc(),
+                    finished_at=now_utc(),
+                    exit_code=0,
+                    params={"seed": seed},
+                    command=PlannedCommand(argv=["true", str(seed)], workdir="/tmp"),
+                )
+            )
+    finally:
+        service.close()
+
+    result = invoke(home, "run", "diff", "run_before", "run_after")
+
+    assert result.exit_code == 0, result.output
+    assert "run_before" in result.output and "run_after" in result.output
+    assert "changed" in result.output
+    assert "runs differ" in result.output

@@ -123,6 +123,14 @@ def _emit(state: CliState, payload: Any, human: callable | None = None) -> None:
     human(payload)
 
 
+def _diff_value(value: Any) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    return str(value)
+
+
 def _parse_param(token: str) -> tuple[str, Any]:
     key, sep, raw = token.partition("=")
     if not sep or not key.strip():
@@ -1297,6 +1305,108 @@ def report(
             f"wrote {target} ({counts['total']} runs: {counts['succeeded']} succeeded, "
             f"{counts['failed']} failed, {counts['active']} open)"
         )
+
+
+@run_app.command("manifest")
+def run_manifest(
+    ctx: typer.Context,
+    run_id: str = typer.Argument(...),
+    out: Path | None = typer.Option(None, "--out", help="Write the JSON here instead of stdout."),
+    no_hashes: bool = typer.Option(
+        False, "--no-hashes", help="Skip content hashes of the outputs (faster, less provable)."
+    ),
+    limit: int = typer.Option(500, "--limit", help="Maximum output files to list."),
+) -> None:
+    """Write a stable JSON record of one run: inputs, code, environment, outputs.
+
+    The run record lives in a database; this is the version that can be committed
+    next to results or attached to a report. An unreadable output listing is
+    recorded as an error rather than as an empty result.
+    """
+    state = _state(ctx)
+    with _errors(state):
+        payload = _service(state).run_manifest(
+            run_id, hashes=not no_hashes, limit=limit
+        )
+        text = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+        if out is None:
+            typer.echo(text)
+            return
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text + "\n", encoding="utf-8")
+        outputs = payload["outputs"]
+        typer.echo(
+            f"wrote {out}  ({len(outputs['files'])} output file(s)"
+            + (f", listing error: {outputs['error']}" if outputs.get("error") else "")
+            + ")"
+        )
+
+
+@run_app.command("diff")
+def run_diff(
+    ctx: typer.Context,
+    left: str = typer.Argument(..., help="First run id (the 'before')."),
+    right: str = typer.Argument(..., help="Second run id (the 'after')."),
+    artifacts: bool = typer.Option(
+        False,
+        "--artifacts",
+        help="Also compare output files by name and content hash (reads both nodes).",
+    ),
+    limit: int = typer.Option(200, "--limit", help="Maximum files to compare per side."),
+) -> None:
+    """Compare two runs by what differs: parameters, provenance, outcome, outputs."""
+    state = _state(ctx)
+
+    def human(payload: dict[str, Any]) -> None:
+        typer.echo(f"before  {payload['left']}")
+        typer.echo(f"after   {payload['right']}")
+        for title, rows, key in (
+            ("params", payload["params"], "key"),
+            ("provenance", payload["provenance"], "name"),
+            ("outcome", payload["outcome"], "name"),
+        ):
+            typer.echo("")
+            typer.secho(title, bold=True)
+            render.table(
+                ["field", "before", "after", ""],
+                [
+                    [
+                        row[key],
+                        _diff_value(row["left"]),
+                        _diff_value(row["right"]),
+                        row.get("status") or ("same" if row["same"] else "changed"),
+                    ]
+                    for row in rows
+                ],
+            )
+        typer.echo("")
+        typer.secho("command", bold=True)
+        if payload["command"]["same"]:
+            typer.echo("  identical")
+        else:
+            typer.echo(f"  before: {payload['command']['left']}")
+            typer.echo(f"  after : {payload['command']['right']}")
+
+        outputs = payload["outputs"]
+        typer.echo("")
+        typer.secho("outputs", bold=True)
+        if not outputs["available"]:
+            typer.echo(f"  not compared: {outputs['reason']}")
+        else:
+            for path in outputs["only_left"]:
+                typer.echo(f"  only before: {path}")
+            for path in outputs["only_right"]:
+                typer.echo(f"  only after : {path}")
+            for row in outputs["changed"]:
+                typer.echo(
+                    f"  changed: {row['path']}  {row['left_size']} -> {row['right_size']} bytes"
+                )
+            typer.echo(f"  {outputs['same']} identical file(s)")
+        typer.echo("")
+        typer.secho("no differences" if not payload["changed"] else "runs differ", bold=True)
+
+    with _errors(state):
+        _emit(state, _service(state).diff_runs(left, right, artifacts=artifacts, limit=limit), human)
 
 
 @run_app.command("classify")

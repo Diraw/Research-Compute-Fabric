@@ -11,7 +11,7 @@ import platform
 import re
 import shutil
 import sys
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +34,9 @@ from .core.runner import Runner, SubprocessRunner
 from .environments.manager import EnvironmentManager
 from .projects.service import ProjectService
 from .resources.inspector import ResourceInspector, gpu_key
+from .runs.diff import compare_runs
 from .runs.manager import RunManager, state_age_seconds
+from .runs.manifest import build_manifest, wall_seconds
 from .runs.planner import RunPlanner
 from .runs.store import Store
 from .runs.sweep import expand_grid
@@ -65,19 +67,6 @@ def parse_since(value: str | None) -> int | None:
 
 def _is_terminal(state: str) -> bool:
     return state in _TERMINAL_STATES
-
-
-def _wall_seconds(start: str | None, end: str | None) -> float | None:
-    """Wall clock between two stored timestamps, never negative."""
-
-    if not start or not end:
-        return None
-    try:
-        began = datetime.fromisoformat(start)
-        stopped = datetime.fromisoformat(end)
-    except ValueError:
-        return None
-    return max(0.0, (stopped - began).total_seconds())
 
 
 class RcfService:
@@ -720,7 +709,7 @@ class RcfService:
         for payload in payloads:
             if payload["state"] != "succeeded":
                 continue
-            seconds = _wall_seconds(payload.get("submitted_at"), payload.get("finished_at"))
+            seconds = wall_seconds(payload.get("submitted_at"), payload.get("finished_at"))
             if seconds is not None:
                 durations.setdefault(payload.get("project_id") or "-", []).append(seconds)
 
@@ -761,6 +750,74 @@ class RcfService:
             "projects": projects,
             "recent": payloads,
         }
+
+    def run_manifest(
+        self, run_id: str, *, hashes: bool = True, limit: int = 500
+    ) -> dict[str, Any]:
+        """Build a stable, deliverable record of one run and what it produced.
+
+        The record is read from the database; only the output listing is live.
+        When that listing cannot be read the document says so — an empty ``outputs``
+        array would read as "this run produced nothing", which is a different
+        claim.
+        """
+
+        payload = self._run_payload(self.runs.get(run_id))
+        outputs: dict[str, Any] | None = None
+        error: str | None = None
+        if payload.get("handle") and payload.get("result_dir"):
+            try:
+                listed = self.runs.results(run_id, limit=limit, hashes=hashes)
+                outputs = listed.model_dump(mode="json")
+            except RcfError as exc:
+                error = f"{exc.code}: {exc.message}"
+            except Exception as exc:  # noqa: BLE001 - the record is still worth writing
+                error = str(exc)[:200]
+        return build_manifest(
+            payload,
+            outputs=outputs,
+            outputs_error=error,
+            generated_at=now_utc().isoformat(timespec="seconds"),
+        )
+
+    def diff_runs(
+        self,
+        left_id: str,
+        right_id: str,
+        *,
+        artifacts: bool = False,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        """Compare two runs field by field.
+
+        Artifacts are opt-in because a real comparison needs content hashes: sizes
+        that happen to match are not evidence of identical files, and reporting
+        "same" on that basis would be worse than not comparing at all.
+        """
+
+        left = self._run_payload(self.runs.get(left_id))
+        right = self._run_payload(self.runs.get(right_id))
+        outputs_left = outputs_right = None
+        reason: str | None = None
+        if artifacts:
+            try:
+                outputs_left = self.runs.results(left_id, limit=limit, hashes=True).model_dump(
+                    mode="json"
+                )
+                outputs_right = self.runs.results(right_id, limit=limit, hashes=True).model_dump(
+                    mode="json"
+                )
+            except RcfError as exc:
+                reason = f"{exc.code}: {exc.message}"
+            except Exception as exc:  # noqa: BLE001 - report, never fail the diff
+                reason = str(exc)[:200]
+        return compare_runs(
+            left,
+            right,
+            outputs_left=outputs_left,
+            outputs_right=outputs_right,
+            outputs_reason=reason,
+        )
 
     def list_runs(
         self,

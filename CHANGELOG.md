@@ -8,6 +8,16 @@ behavior, and every entry states the verification boundary.
 
 ### Added
 
+- `rcf run manifest <run_id> [--out file.json]`: a stable JSON record of one run —
+  command, parameters, git commit, environment fingerprint, input digest, and the
+  output files with their sha256. The output listing is read live; when it cannot be
+  read the document records the error instead of an empty list, which would read as
+  "this run produced nothing". `--no-hashes` skips content hashing.
+- `rcf run diff <a> <b> [--artifacts]`: compares two runs by parameter, provenance,
+  outcome, command and (opt-in) outputs. The command is compared by argv, not by the
+  stored preview, because the preview carries the run id and would make every pair
+  look different. Artifact comparison hashes both sides: two files of equal size and
+  different content are `changed`, never `same`.
 - `rcf run sweep -p PROJECT --grid seed=1,2,3 [--grid mode=fast,slow]`: plan every
   combination of a parameter grid, then submit them as one sweep. The whole grid is
   planned before the first submission, so one impossible point refuses the request

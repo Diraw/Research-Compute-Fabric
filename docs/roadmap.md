@@ -74,8 +74,9 @@
 
 ### P2.2 文件规范
 
-- run manifest：git commit、环境指纹、inputs sha256、命令、seed、outputs sha256，落盘
-  `manifest.json`；现已在 run 记录中保存，待生成独立可交付文件。
+- run manifest：2026-11-08 落地 `rcf run manifest`（单 JSON，含 git/环境指纹/inputs
+  摘要/命令/outputs sha256；扫描不到产物时写明错误而不是空列表）。落盘位置由
+  `--out` 决定，不写入节点运行目录。
 - `rcf run fetch`：已有 tar + scp + SHA-256；待补断点重试/续传与大文件场景。
 - 存储治理：`storage scan/report/check`、`project push` 逐文件回执、两阶段清理
   `storage adopt/plan/apply` 均已有实现；待补真实节点上的 ACL/硬链接/大文件/断网回执验证。
@@ -84,7 +85,8 @@
   `sweep_id` 归组）。批量提交之后，`rcf report` 与 `run list --sweep` 直接可读。
 - 只读报告：2026-11-08 落地 `rcf report`（单文件 HTML，投影本地库，不提供服务）。
   页面第一列是失败分类，`domain` 用中性色，未观测状态标 `unverified`。
-- `rcf run diff`：比较两次 run 的参数、环境、输入、产物差异。
+- `rcf run diff`：2026-11-08 落地；参数逐键、provenance、outcome、按 argv 比命令，
+  `--artifacts` 才比产物且两侧算 sha256。
 - 可选：每日只读巡检 + 通知；自动删除保持关闭。
 - 配额/项目存储系统对接：读取真实 quota/inode 数据，替代仅按目录统计。
 

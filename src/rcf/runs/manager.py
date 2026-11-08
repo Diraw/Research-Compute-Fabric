@@ -569,7 +569,9 @@ class RunManager:
         return record
 
     # -- results ------------------------------------------------------------ #
-    def results(self, run_id: str, *, limit: int = 200) -> ResultManifest:
+    def results(
+        self, run_id: str, *, limit: int = 200, hashes: bool = False
+    ) -> ResultManifest:
         self.policy.check("run.results")
         record = self.get(run_id)
         if record.handle is None:
@@ -579,7 +581,11 @@ class RunManager:
         node = self.config.node(record.node_id)
         executor = build_executor(self.config, node, self.runner)
         manifest_fn = getattr(executor, "result_manifest", None)
-        entries = manifest_fn(record.handle, limit=limit, root=record.result_dir) if callable(manifest_fn) else []
+        entries = (
+            manifest_fn(record.handle, limit=limit, root=record.result_dir, hashes=hashes)
+            if callable(manifest_fn)
+            else []
+        )
         note = (
             "RCF lists results in place; it does not transfer bulk data between nodes "
             "(see docs/roadmap.md). Use the node's own tools for large transfers."
