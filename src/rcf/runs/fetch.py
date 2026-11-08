@@ -15,6 +15,7 @@ import stat
 import sys
 import tarfile
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -174,6 +175,11 @@ class ResultFetcher:
     def _copy_remote(self, node, executor, record: RunRecord, source: SourceSet, dest: Path) -> dict[str, Any]:
         transport = SshTransport.from_node(node, self.runner)
         run_dir = (record.handle.workdir if record.handle else "") or ""
+        # A fetch holds the run's source guard, and guards serialize fetches of the
+        # same run.  So any archive already sitting in this run directory belongs
+        # to an attempt that died (a killed controller cannot run its cleanup),
+        # and nothing else can be reading it right now.
+        reclaimed = _sweep_archives(transport, run_dir) if run_dir else 0
         archive = posixpath.join(run_dir, f".rcf-fetch-{uuid.uuid4().hex}.tar.gz")
         try:
             packed = transport.run(
@@ -185,7 +191,10 @@ class ResultFetcher:
                     detail={"stderr": redact(packed.stderr)[:400]},
                 )
             remote_hash = self._remote_sha256(transport, archive)
-            with tempfile.TemporaryDirectory(prefix="rcf-fetch-") as tmp:
+            # Name the temporary directory after the run so an interrupted attempt
+            # can be recognised and removed by the next fetch of the same run.
+            _sweep_temp(record.run_id)
+            with tempfile.TemporaryDirectory(prefix=f"rcf-fetch-{record.run_id}-") as tmp:
                 local_archive = Path(tmp) / ARCHIVE_NAME
                 transport.fetch_file(archive, local_archive)
                 local_hash = _sha256_file(local_archive)
@@ -197,7 +206,8 @@ class ResultFetcher:
             transport.run(f"rm -f {shquote(archive)}", timeout=60)
         verified = bool(remote_hash) and all(_valid_hash(e.get("sha256")) for e in source.entries)
         return {"files": len(entries), "bytes": sum(e["bytes"] for e in entries),
-                "verified": verified, "sha256": remote_hash, "entries": entries}
+                "verified": verified, "sha256": remote_hash, "entries": entries,
+                "reclaimed_archives": reclaimed}
 
     def _remote_sha256(self, transport: SshTransport, archive: str) -> str | None:
         q = shquote(archive)
@@ -215,6 +225,60 @@ class ResultFetcher:
 
 # Helpers are shared by local copies and archive extraction; neither follows
 # links nor overwrites files in-place (hard links included).
+
+def _sweep_archives(transport: SshTransport, run_dir: str) -> int:
+    """Remove archives left by a fetch that died before its cleanup ran.
+
+    Only ``.rcf-fetch-*.tar.gz`` inside the run directory is touched: the name is
+    RCF's own, and the caller holds the guard that keeps another fetch of this run
+    from running at the same time.
+    """
+
+    result = transport.run(
+        f"find {shquote(run_dir)} -maxdepth 1 -name '.rcf-fetch-*.tar.gz' -type f "
+        "-delete -print 2>/dev/null | wc -l",
+        timeout=120,
+    )
+    if result.returncode != 0:
+        return 0
+    try:
+        return int(result.stdout.strip().split()[-1])
+    except (IndexError, ValueError):
+        return 0
+
+
+def _sweep_temp(run_id: str) -> None:
+    """Remove this run's leftover download directories under the system temp root.
+
+    A hard-killed process never runs ``TemporaryDirectory`` cleanup, so a large
+    fetch leaves its partial archive behind.  Only directories carrying this run's
+    own name are removed; a live fetch of the same run cannot exist, because it
+    would have to hold the same guard.
+    """
+
+    root = Path(tempfile.gettempdir())
+    try:
+        mine = list(root.glob(f"rcf-fetch-{run_id}-*"))
+    except OSError:
+        return
+    for path in mine:
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+    # Older RCF versions named these directories without the run id, so they
+    # cannot be attributed.  Age is the only evidence available for those, and a
+    # day is long enough that no live copy is that old.
+    cutoff = time.time() - 24 * 3600
+    try:
+        legacy = [path for path in root.glob("rcf-fetch-*") if path not in mine]
+    except OSError:
+        return
+    for path in legacy:
+        try:
+            if path.is_dir() and path.stat().st_mtime < cutoff:
+                shutil.rmtree(path, ignore_errors=True)
+        except OSError:
+            continue
+
 
 def _valid_hash(value: Any) -> bool:
     return isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{64}", value) is not None

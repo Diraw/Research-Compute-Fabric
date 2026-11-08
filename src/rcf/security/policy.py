@@ -50,6 +50,9 @@ OPERATION_TIERS: dict[str, PermissionTier] = {
     "storage.adopt": PermissionTier.EXECUTE,
     "storage.apply": PermissionTier.EXECUTE,
     "storage.pin": PermissionTier.EXECUTE,
+    # Removes an exclusion that a dead operation left behind: execute tier,
+    # confirmed, and audited with the guard's own evidence.
+    "storage.release_guard": PermissionTier.EXECUTE,
     "run.fetch": PermissionTier.EXECUTE,
     "run.submit": PermissionTier.EXECUTE,
     "run.cancel": PermissionTier.EXECUTE,

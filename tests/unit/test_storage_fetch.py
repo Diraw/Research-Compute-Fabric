@@ -323,3 +323,66 @@ def test_missing_remote_hash_is_not_copy_evidence(tmp_path, monkeypatch):
 def test_json_protocol_escapes_newlines_and_tabs():
     raw = {"complete": True, "entries": [{"path": "line\n\ttwo", "size": 0}]}
     assert parse_output_manifest(json.dumps(raw))[0]["path"] == "line\n\ttwo"
+
+
+def test_a_stale_archive_from_a_killed_fetch_is_reclaimed(ssh_sandbox, slurm_home, tmp_path):
+    """A killed controller cannot run its cleanup, so the next fetch sweeps.
+
+    The fetch holds the run's guard, and guards serialize fetches of one run, so an
+    archive already sitting in the run directory cannot belong to a live copy.
+    """
+
+    config = Config.load(slurm_home)
+    run_dir = ssh_sandbox.run_dirs / "run-killed"
+    source = run_dir / "outputs"
+    source.mkdir(parents=True)
+    (source / "result.txt").write_bytes(b"kept")
+    stale = run_dir / ".rcf-fetch-0123456789abcdef0123456789abcdef.tar.gz"
+    stale.write_bytes(b"half an archive from a controller that died")
+
+    fetcher = ResultFetcher(config, Audit(), SubprocessRunner())
+    payload = fetcher.fetch(record(run_dir, "lab-hpc", custom=str(source)), dest=tmp_path / "out", confirmed=True)
+
+    assert payload["verified"] is True
+    assert payload["reclaimed_archives"] == 1
+    assert not stale.exists()
+    assert not list(run_dir.glob(".rcf-fetch-*.tar.gz"))
+
+
+def test_leftover_temp_directories_of_this_run_are_removed(tmp_path, monkeypatch):
+    """A hard kill skips TemporaryDirectory cleanup; the next fetch of the run sweeps."""
+
+    import rcf.runs.fetch as module
+
+    temp_root = tmp_path / "temp"
+    temp_root.mkdir()
+    monkeypatch.setattr(module.tempfile, "gettempdir", lambda: str(temp_root))
+    mine = temp_root / "rcf-fetch-run_a-deadbeef"
+    mine.mkdir()
+    (mine / "rcf-fetch.tar.gz").write_bytes(b"partial")
+    other_run = temp_root / "rcf-fetch-run_b-cafe"
+    other_run.mkdir()
+
+    module._sweep_temp("run_a")
+
+    assert not mine.exists()
+    assert other_run.exists(), "another run's directory is not ours to delete"
+
+
+def test_an_interrupted_scp_is_reported_as_an_interruption(tmp_path):
+    """Windows reports a killed process as 0xFFFFFFFF; that is not a missing file."""
+
+    from rcf.executors.ssh import SshTransport
+
+    class Killed:
+        def run(self, argv, **kwargs):
+            return CommandResult(argv=tuple(argv), returncode=4294967295, stdout="", stderr="", duration_s=0.1)
+
+    transport = SshTransport("lab", Killed(), program=("ssh",), scp_program=("scp",))
+
+    with pytest.raises(ExecutorError) as caught:
+        transport.fetch_file("/remote/archive.tar.gz", tmp_path / "archive.tar.gz")
+
+    assert "was interrupted" in str(caught.value)
+    assert "exit -1" in str(caught.value)
+    assert "check that the remote path is readable" not in caught.value.hint

@@ -8,6 +8,10 @@ behavior, and every entry states the verification boundary.
 
 ### Added
 
+- `rcf storage guards` and `rcf storage unguard <guard>... --yes`: a guard has no
+  expiry, so an interrupted fetch or cleanup keeps its roots locked forever. These
+  show what is holding them and release it deliberately, with the guard's own
+  evidence written to the audit log.
 - `rcf run manifest <run_id> [--out file.json]`: a stable JSON record of one run —
   command, parameters, git commit, environment fingerprint, input digest, and the
   output files with their sha256. The output listing is read live; when it cannot be
@@ -88,6 +92,16 @@ behavior, and every entry states the verification boundary.
 
 ### Fixed
 
+- A blocked root now says who holds it: `fetch of run_... still holds these roots`
+  plus the exact `rcf storage unguard <id> --yes` that frees it. "storage roots
+  already guarded" left the user with a dead end and no next step.
+- An interrupted transfer is reported as one: a killed scp shows up as exit
+  `0xFFFFFFFF`, which was printed as `exit code 4294967295` with the hint "check that
+  scp exists locally". It now reads `copying from 'lab-hpc' was interrupted (scp exit
+  -1); nothing partial was kept here`, and says to retry.
+- A fetch that dies before its cleanup no longer leaves garbage: the next fetch of
+  the same run reclaims `.rcf-fetch-*.tar.gz` from the run directory (269 MB in the
+  measured case) and removes its own stale temporary download directories.
 - A command whose executable is a Windows path is refused at plan time for
   Slurm and SSH nodes. Git Bash rewrites `/public/x` into
   `C:/Program Files/Git/public/x` before RCF sees the argument, and shlex then

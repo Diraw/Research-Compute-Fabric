@@ -77,7 +77,10 @@
 - run manifest：2026-11-08 落地 `rcf run manifest`（单 JSON，含 git/环境指纹/inputs
   摘要/命令/outputs sha256；扫描不到产物时写明错误而不是空列表）。落盘位置由
   `--out` 决定，不写入节点运行目录。
-- `rcf run fetch`：已有 tar + scp + SHA-256；待补断点重试/续传与大文件场景。
+- `rcf run fetch`：tar + scp + SHA-256；2026-11-08 完成大文件与断线验收（269 MB /
+  204 文件，52–63 s，裸 scp 30 s）。断点续传不做：中断后重取一次约 52 s，续传要维护
+  分片状态，换来的只是省一次重传。中断留下的 guard / 归档 / 临时目录已改为可释放、
+  可自愈（`rcf storage guards` / `unguard`）。
 - 存储治理：`storage scan/report/check`、`project push` 逐文件回执、两阶段清理
   `storage adopt/plan/apply` 均已有实现；待补真实节点上的 ACL/硬链接/大文件/断网回执验证。
   永久删除始终需要逐次确认。

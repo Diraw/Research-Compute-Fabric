@@ -225,3 +225,28 @@ def test_cli_diff_reports_what_changed_between_two_runs(home):
     assert "run_before" in result.output and "run_after" in result.output
     assert "changed" in result.output
     assert "runs differ" in result.output
+
+
+def test_cli_lists_and_releases_a_stale_guard(home):
+    from rcf.core.config import Config
+
+    service = RcfService(Config.load(home), actor="test")
+    try:
+        guard = service.storage.ledger.acquire_guard(
+            "laptop", ["/tmp/out"], operation="fetch", owner_id="run_a"
+        )
+    finally:
+        service.close()
+
+    listed = invoke(home, "storage", "guards")
+    assert listed.exit_code == 0, listed.output
+    assert guard in listed.output and "run_a" in listed.output
+
+    refused = invoke(home, "storage", "unguard", guard)
+    assert refused.exit_code != 0
+    assert "confirmation" in refused.output
+
+    released = invoke(home, "storage", "unguard", guard, "--yes")
+    assert released.exit_code == 0, released.output
+    assert "released guard" in released.output
+    assert "no active guards" in invoke(home, "storage", "guards").output

@@ -692,6 +692,34 @@ class StorageManager:
                 for token in reversed(guards):
                     self.ledger.release_guard(token)
 
+    def guards(self, node_id: str | None = None) -> list[dict]:
+        """Active storage guards, newest last.
+
+        A guard has no expiry: when the process that took it dies, the roots stay
+        locked.  This is the only way to see what is holding them.
+        """
+
+        return self.ledger.guards(node_id)
+
+    def release_guard(self, guard_id: str, *, confirm: bool = False) -> dict:
+        """Release one guard after a human decided its owner is gone.
+
+        Releasing a guard whose operation is still running removes the exclusion
+        that keeps a cleanup away from a live copy, so this needs an explicit
+        confirmation and is written to the audit log with the guard's own
+        evidence attached.
+        """
+
+        self.policy.check("storage.release_guard")
+        self.policy.check_confirmation("storage.release_guard", confirm)
+        active = {guard.get("guard_id"): guard for guard in self.ledger.guards()}
+        found = active.get(guard_id)
+        if found is None:
+            raise NotFound(f"no active storage guard {guard_id!r}")
+        self.ledger.release_guard(guard_id)
+        self._audit("storage.release_guard", node_id=found.get("node_id"), detail=found)
+        return found
+
     def _audit(self, operation: str, *, node_id=None, run_id=None, detail=None):
         self.store.record_audit(actor=self.actor, operation=operation, tier="execute", decision="allowed",
                                 node_id=node_id, run_id=run_id, detail=detail or {})

@@ -101,7 +101,7 @@ Agent 工作循环见 [Agent 接入指南](agent-guide.md)；验证范围见 [�
 | `storage_plans` | 清理/登记计划与会话状态 | 具体路径，不接受 glob |
 | `storage_copies` | 逐文件复制回执 | 只有 `complete && verified` 可作副本证据 |
 | `storage_pins` | run 保留标记 | 变更提升保护版本 |
-| `storage_guards` | 路径资源守卫 | 祖先重叠互斥；中断不自动 TTL 释放 |
+| `storage_guards` | 路径资源守卫 | 祖先重叠互斥；中断不自动 TTL 释放，只能由人 `rcf storage unguard` 显式释放 |
 | `storage_journal` | 清理逐项状态 | 用于中断恢复与审计 |
 | `progress_observations` | 进度观察历史（每 run 最多 128 条修订） | 只存 JSON，不存原始日志 |
 | `progress_latest` | 每个 run 的最新观察与 revision | 轮询可缓存，不重复探测 |

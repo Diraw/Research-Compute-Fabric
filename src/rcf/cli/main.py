@@ -14,7 +14,7 @@ import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -121,6 +121,17 @@ def _emit(state: CliState, payload: Any, human: callable | None = None) -> None:
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
         return
     human(payload)
+
+
+def _age(stamp: str | None) -> str:
+    if not stamp:
+        return "-"
+    try:
+        began = datetime.fromisoformat(stamp)
+    except ValueError:
+        return "-"
+    seconds = max(0, int((datetime.now(UTC) - began).total_seconds()))
+    return f"{seconds // 60}m" if seconds < 3600 else f"{seconds // 3600}h{seconds % 3600 // 60:02d}m"
 
 
 def _diff_value(value: Any) -> str:
@@ -747,6 +758,76 @@ def storage_adopt(
             ),
             lambda payload: _storage_human("Storage adoption plan (not applied)", payload, plan=True),
         )
+
+
+@storage_app.command("guards")
+def storage_guards(
+    ctx: typer.Context,
+    node_id: str | None = typer.Option(None, "--node"),
+) -> None:
+    """List root guards: a guard has no expiry, and a dead operation keeps it."""
+    state = _state(ctx)
+    with _errors(state):
+        guards = _service(state).storage.guards(node_id)
+
+    def human(payload: list[dict[str, Any]]) -> None:
+        if not payload:
+            typer.echo("no active guards")
+            return
+        render.table(
+            ["guard", "node", "operation", "owner", "age", "roots"],
+            [
+                [
+                    guard.get("guard_id"),
+                    guard.get("node_id"),
+                    guard.get("operation"),
+                    guard.get("owner_id"),
+                    _age(guard.get("created_at")),
+                    ", ".join(guard.get("roots") or []),
+                ]
+                for guard in payload
+            ],
+        )
+        typer.echo("release one with: rcf storage unguard <guard> --yes")
+
+    _emit(state, guards, human)
+
+
+@storage_app.command("unguard")
+def storage_unguard(
+    ctx: typer.Context,
+    guard_ids: list[str] = typer.Argument(...),
+    yes: bool = typer.Option(
+        False, "--yes", help="Confirm the owning operations are gone and release their exclusions.",
+    ),
+) -> None:
+    """Release stale guards (an interrupted fetch or cleanup leaves them behind).
+
+    Releasing a live guard removes the exclusion that keeps a cleanup away from a
+    running copy, so review the owner and its age first.  One interrupted fetch
+    holds two guards — the source and the destination — so this takes several.
+    """
+    state = _state(ctx)
+    with _errors(state):
+        payload = [_service(state).storage.release_guard(guard_id, confirm=yes)
+                   for guard_id in guard_ids]
+
+    def human(guards: list[dict[str, Any]]) -> None:
+        for guard in guards:
+            render.kv_block(
+                "released guard",
+                [
+                    ("guard", guard.get("guard_id")),
+                    ("node", guard.get("node_id")),
+                    ("operation", guard.get("operation")),
+                    ("owner", guard.get("owner_id")),
+                    ("held for", _age(guard.get("created_at"))),
+                    ("roots", ", ".join(guard.get("roots") or [])),
+                ],
+            )
+        typer.echo("next: retry the operation that was blocked")
+
+    _emit(state, payload, human)
 
 
 @storage_app.command("show")
@@ -1554,17 +1635,19 @@ def run_fetch(
     state = _state(ctx)
 
     def human(payload: dict[str, Any]) -> None:
-        render.kv_block(
-            f"fetched {payload['run_id']}",
-            [
-                ("destination", payload["dest"]),
-                ("source", payload["source"]),
-                ("files", payload["files"]),
-                ("bytes", payload["bytes"]),
-                ("sha256", payload.get("sha256")),
-                ("verified", payload["verified"]),
-            ],
-        )
+        rows = [
+            ("destination", payload["dest"]),
+            ("source", payload["source"]),
+            ("files", payload["files"]),
+            ("bytes", payload["bytes"]),
+            ("sha256", payload.get("sha256")),
+            ("verified", payload["verified"]),
+        ]
+        if payload.get("reclaimed_archives"):
+            rows.append(
+                ("reclaimed", f"{payload['reclaimed_archives']} archive(s) from an interrupted fetch")
+            )
+        render.kv_block(f"fetched {payload['run_id']}", rows)
         typer.echo("next: open the files in the destination directory")
 
     with _errors(state):

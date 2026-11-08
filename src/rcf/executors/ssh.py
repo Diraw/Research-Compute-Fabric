@@ -203,6 +203,18 @@ class SshTransport:
                 self.scp_argv(quoted, str(local_path), legacy=True), timeout=timeout
             )
         if result.returncode != 0:
+            if _interrupted(result.returncode):
+                # A killed scp and a dropped link both surface as an exit code no
+                # one can read: Windows reports 0xFFFFFFFF for a terminated
+                # process, and ssh reports 255 with no message.  "check that the
+                # remote path is readable" sends the user to the wrong place.
+                raise ExecutorError(
+                    f"copying from {self.alias!r} was interrupted "
+                    f"(scp exit {_exit_text(result.returncode)}); nothing partial was kept here",
+                    hint="retry the copy; a dropped connection is the usual cause",
+                    detail={"alias": self.alias, "returncode": result.returncode,
+                            "stderr": redact(result.stderr)[:400]},
+                )
             raise ExecutorError(
                 f"scp failed for {self.alias!r}: {redact(result.first_error_line())}",
                 hint="check that scp exists locally and that the remote path is readable",
@@ -259,3 +271,21 @@ def path_quote(value: str) -> str:
     from ..core.runner import shquote
 
     return shquote(value)
+
+
+def _exit_text(returncode: int) -> str:
+    """Readable form of a Windows-killed process code (0xFFFFFFFF is -1)."""
+
+    if returncode >= 0x80000000:
+        return str(returncode - 0x100000000)
+    return str(returncode)
+
+
+def _interrupted(returncode: int) -> bool:
+    """True when scp died rather than reporting a remote error.
+
+    ``255`` is ssh's transport failure (the connection, not the path);
+    ``0xFFFFFFFF`` and negative codes are a terminated process.
+    """
+
+    return returncode == 255 or returncode < 0 or returncode >= 0x80000000

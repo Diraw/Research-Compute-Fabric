@@ -424,7 +424,19 @@ class Ledger:
                     for found in matches:
                         if not (resume_owner and found.get("owner_id") == resume_owner
                                 and found.get("operation") == operation):
-                            raise Conflict("storage roots already guarded", detail={"guard": found})
+                            # Name the holder and the way out.  A guard has no
+                            # expiry: an interrupted operation leaves the roots
+                            # locked until somebody releases it, and "already
+                            # guarded" alone leaves the user with no next step.
+                            raise Conflict(
+                                f"{found.get('operation')} of {found.get('owner_id')} "
+                                f"still holds these roots",
+                                hint=(
+                                    "if that operation was interrupted, release its guard: "
+                                    f"rcf storage unguard {found.get('guard_id')} --yes"
+                                ),
+                                detail={"guard": found},
+                            )
                         adopted.append(found["guard_id"])
                 else:
                     remaining.append(root)
