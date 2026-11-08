@@ -64,6 +64,8 @@ td.wrap { max-width: 460px; overflow-wrap: anywhere; color: #3d444d; }
 .empty { color: #6b7280; font-style: italic; padding: 10px 0; }
 .kindbar { display: inline-block; height: 8px; border-radius: 2px; min-width: 3px; }
 table.summary { width: auto; min-width: 480px; }
+table.trend { width: auto; }
+.scroll { overflow-x: auto; }
 """
 
 
@@ -131,6 +133,59 @@ def _kind_badge(kind: str | None) -> str:
     return (
         f'<span class="badge" style="color:{colour}" title="{_esc(title)}">{_esc(label)}</span>'
     )
+
+
+def _trend_section(trend: dict[str, Any]) -> list[str]:
+    """Kind over time: what appeared, when, and against how many runs.
+
+    Deliberately a matrix of counts rather than a line chart.  A line invites the
+    reader to extend it, and with this many failures the extension would be
+    invented; the counts plus their denominators are what the data actually says.
+    """
+
+    buckets, kinds = trend["buckets"], trend["kinds"]
+    if not kinds or not buckets:
+        return ['<div class="empty">no failed runs in scope</div>']
+
+    headers = ["kind"] + [f"{bucket['label']} ({bucket['finished']})" for bucket in buckets]
+    headers.append("total")
+    rows = []
+    for row in kinds:
+        cells = [_kind_badge(row["kind"])]
+        for count in row["counts"]:
+            # A zero is a real observation (nothing of this kind failed then), so it
+            # keeps its column instead of collapsing the row to a sparse list.
+            cells.append(
+                f'<span class="num">{count}</span>' if count else '<span class="muted">·</span>'
+            )
+        cells.append(f'<span class="num">{row["total"]}</span>')
+        rows.append(cells)
+
+    weekly = trend["bucket"] == "week"
+    unit = "week" if weekly else "day"
+    note = (
+        f"Columns are {unit}s"
+        + (" (starting Monday)" if weekly else "")
+        + f"; the number in brackets is how many runs finished in that {unit}, so a "
+        "cell can be read against its denominator. These are counts, not rates: with a "
+        "few dozen failures a difference of one is not a trend."
+    )
+    if trend.get("truncated"):
+        note += (
+            f" The first column folds everything before "
+            f"{trend.get('folded_before') or 'the window'} into one count."
+        )
+    return [
+        '<div class="scroll">'
+        + _table(
+            headers,
+            rows,
+            classes=["", *["num"] * len(buckets), "num"],
+            css_class="trend",
+        )
+        + "</div>",
+        f'<p class="note">{note}</p>',
+    ]
 
 
 def _table(
@@ -243,6 +298,9 @@ def render_report(data: dict[str, Any]) -> str:
             "configuration. <strong>unknown</strong> means no decisive evidence was "
             "recorded, not that the run was fine.</p>"
         )
+        parts.append("<h2>When each kind appeared</h2>")
+        parts.extend(_trend_section(data.get("trend") or {}))
+
         detail_rows = []
         for group in data["failures"]:
             for run in group["runs"]:

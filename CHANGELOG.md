@@ -8,6 +8,11 @@ behavior, and every entry states the verification boundary.
 
 ### Added
 
+- The report answers "when" as well as "what": a `When each kind appeared` matrix
+  counts failures per kind per day, switching to weeks when the window exceeds two
+  weeks. Each column carries how many runs finished in that bucket, so a cell reads
+  against its denominator. Beyond twelve buckets the older history folds into one
+  `earlier` column instead of disappearing, and the note says what it covers.
 - `rcf storage guards` and `rcf storage unguard <guard>... --yes`: a guard has no
   expiry, so an interrupted fetch or cleanup keeps its roots locked forever. These
   show what is holding them and release it deliberately, with the guard's own

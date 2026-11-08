@@ -11,7 +11,7 @@ import platform
 import re
 import shutil
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +63,109 @@ def parse_since(value: str | None) -> int | None:
             detail={"value": value},
         )
     return int(match.group(1)) * _SINCE_UNITS[match.group(2)]
+
+
+def _event_date(payload: dict[str, Any]) -> datetime | None:
+    """When the run reached its recorded outcome, as a date-bearing timestamp."""
+
+    for key in ("finished_at", "created_at"):
+        value = payload.get(key)
+        if not value:
+            continue
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            continue
+    return None
+
+
+def failure_trend(payloads: list[dict[str, Any]], *, max_buckets: int = 12) -> dict[str, Any]:
+    """Count failures per kind per time bucket.
+
+    Not a rate chart.  With a few dozen failures a one-run difference is noise, and
+    a slope would invent a trend that the data cannot support.  What the data does
+    support: which kinds appeared, in which buckets, and how many runs finished in
+    each bucket so a count can be read against its denominator.
+    """
+
+    dated = [(payload, _event_date(payload)) for payload in payloads]
+    dated = [(payload, moment) for payload, moment in dated if moment is not None]
+    if not dated:
+        return {"bucket": "day", "buckets": [], "kinds": [], "truncated": False}
+
+    span_days = (max(m for _, m in dated) - min(m for _, m in dated)).days
+    weekly = span_days > 14
+    all_keys = sorted({_bucket_key(moment, weekly) for _, moment in dated})
+    truncated = len(all_keys) > max_buckets
+    shown = all_keys[-max_buckets:]
+
+    per_bucket: dict[str, dict[str, Any]] = {}
+    for key in all_keys:
+        members = [
+            payload for payload, moment in dated if _bucket_key(moment, weekly) == key
+        ]
+        finished = [p for p in members if p["state"] in {"succeeded", "failed"}]
+        counts = {kind: 0 for kind in _KIND_ORDER}
+        for payload in finished:
+            if payload["state"] == "failed":
+                counts[payload.get("failure_kind") or "unknown"] += 1
+        per_bucket[key] = {
+            "key": key,
+            "label": _bucket_label(key, weekly),
+            "finished": len(finished),
+            "failed": sum(counts.values()),
+            "counts": counts,
+        }
+
+    columns = [per_bucket[key] for key in shown]
+    earlier: list[str] = []
+    if truncated:
+        # Fold everything before the window into one column instead of dropping it.
+        # Nothing is hidden, so the reader still sees whether a kind was already
+        # failing earlier without scrolling or trusting a summary line.
+        earlier = all_keys[: len(all_keys) - max_buckets]
+        merged = {
+            "key": "earlier",
+            "label": "earlier",
+            "finished": sum(per_bucket[key]["finished"] for key in earlier),
+            "failed": sum(per_bucket[key]["failed"] for key in earlier),
+            "counts": {
+                kind: sum(per_bucket[key]["counts"][kind] for key in earlier)
+                for kind in _KIND_ORDER
+            },
+        }
+        columns.insert(0, merged)
+
+    kinds = []
+    for kind in _KIND_ORDER:
+        series = [column["counts"][kind] for column in columns]
+        if not any(series):
+            continue
+        kinds.append({"kind": kind, "counts": series, "total": sum(series)})
+    return {
+        "bucket": "week" if weekly else "day",
+        "buckets": columns,
+        "kinds": kinds,
+        "truncated": truncated,
+        "folded_before": _bucket_label(shown[0], weekly) if truncated else None,
+    }
+
+
+def _bucket_key(moment: datetime, weekly: bool) -> str:
+    if weekly:
+        year, week, _ = moment.isocalendar()
+        return f"{year}-W{week:02d}"
+    return moment.date().isoformat()
+
+
+def _bucket_label(key: str, weekly: bool) -> str:
+    if weekly:
+        # Short on purpose: the section says the columns are weeks, so repeating
+        # "week of" in every header only makes the table wider than the page.
+        year, week = key.split("-W")
+        monday = datetime.fromisocalendar(int(year), int(week), 1)
+        return monday.strftime("%b %d")
+    return datetime.fromisoformat(key).strftime("%b %d")
 
 
 def _is_terminal(state: str) -> bool:
@@ -747,6 +850,7 @@ class RcfService:
             },
             "active": [p for p in payloads if not _is_terminal(p["state"])],
             "failures": groups,
+            "trend": failure_trend(payloads),
             "projects": projects,
             "recent": payloads,
         }

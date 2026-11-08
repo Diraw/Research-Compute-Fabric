@@ -167,3 +167,79 @@ def test_parse_since_reads_units_and_refuses_guesses():
         parse_since("last week")
     assert caught.value.code == "spec_invalid"
     assert "90m" in caught.value.hint
+
+
+def test_a_kind_that_appeared_on_one_day_is_not_smoothed_across_the_week(service):
+    """Counts per bucket, not a rate: the day a kind appeared is the finding."""
+
+    add_run(service, "run_a", RunState.FAILED, kind=FailureKind.DOMAIN, exit_code=2)
+    add_run(service, "run_b", RunState.FAILED, kind=FailureKind.DOMAIN, exit_code=2)
+    add_run(service, "run_c", RunState.FAILED, kind=FailureKind.ENVIRONMENT, exit_code=127)
+    add_run(service, "run_d", RunState.SUCCEEDED)
+
+    trend = service.build_report()["trend"]
+
+    assert trend["bucket"] == "day"
+    assert len(trend["buckets"]) == 1
+    # The denominator is every run that reached a verdict, so a cell can be read
+    # as "2 of 4", not as a bare number that looks alarming.
+    assert trend["buckets"][0]["finished"] == 4
+    assert trend["buckets"][0]["failed"] == 3
+    kinds = {row["kind"]: row["counts"] for row in trend["kinds"]}
+    assert kinds == {"domain": [2], "environment": [1]}
+
+
+def test_the_window_switches_to_weeks_only_when_days_would_be_too_many(service):
+    for index in range(3):
+        add_run(
+            service, f"run_{index}", RunState.FAILED,
+            kind=FailureKind.CODE, exit_code=1, age=timedelta(days=index * 10),
+        )
+
+    trend = service.build_report()["trend"]
+
+    assert trend["bucket"] == "week"
+    assert trend["kinds"][0]["kind"] == "code"
+
+
+def test_cancelled_runs_are_not_part_of_a_bucket_denominator(service):
+    """A run the operator stopped says nothing about whether work succeeds."""
+
+    add_run(service, "run_stop", RunState.CANCELLED, duration=timedelta(seconds=5))
+    add_run(service, "run_ok", RunState.SUCCEEDED, duration=timedelta(seconds=5))
+
+    trend = service.build_report()["trend"]
+
+    assert trend["buckets"][0]["finished"] == 1
+    assert trend["kinds"] == []
+
+
+def test_buckets_beyond_the_window_are_folded_into_one_column_not_dropped(service):
+    """Nothing disappears from the page: the older history becomes one column."""
+
+    for index in range(100):
+        add_run(
+            service, f"run_{index:03d}", RunState.FAILED,
+            kind=FailureKind.DOMAIN, exit_code=2, age=timedelta(days=index),
+        )
+
+    trend = service.build_report()["trend"]
+
+    assert trend["truncated"] is True
+    assert trend["buckets"][0]["key"] == "earlier"
+    assert trend["buckets"][0]["finished"] > 0
+    # Every run is still accounted for, which is the point of folding.
+    assert sum(bucket["finished"] for bucket in trend["buckets"]) == 100
+    assert trend["kinds"][0]["total"] == 100
+    page = render_report(service.build_report())
+    assert "folds everything before" in page
+
+
+def test_the_trend_section_states_its_own_unit_and_limits(service):
+    add_run(service, "run_a", RunState.FAILED, kind=FailureKind.PARAMETER, exit_code=1)
+
+    page = render_report(service.build_report())
+
+    assert "When each kind appeared" in page
+    assert "Columns are days" in page
+    assert "not rates" in page
