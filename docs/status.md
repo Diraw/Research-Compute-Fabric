@@ -1,5 +1,30 @@
 # 功能完成度与验收状态
 
+## 2026-11-13：search-only 祖先目录推送修复（已合入 main）
+
+- 分支 `fix/search-only-ancestors-20261113`；仅修 Linux 安全提取器目录句柄：
+  支持 `O_PATH` 时不额外要求祖先目录 list 权限，保留 `O_DIRECTORY|O_NOFOLLOW`、
+  `fstat` 目录验证、fd 锚定、归档成员和目标替换校验；Windows 分支不改。
+- Windows/Python 3.11.14：
+  `.venv/Scripts/python.exe -m pytest tests/unit/test_push_search_only_ancestors.py tests/unit/test_executor_push_security.py tests/unit/test_project_push.py tests/unit/test_push_integrity.py`
+  → **72 passed / 2 skipped**（真实非 root Linux 权限测试在 Windows 明确 skip）。
+- 经 RCF 在 Linux 非 root 用户 uid1004 下，旧/新内嵌提取器临时目录对照：
+  **旧版复现 EACCES，修正版提取及原子替换成功**；root/ancestor/nested/file 链接、
+  归档 symlink/hardlink 仍拒绝，实际无写权限仍拒绝。run `run_20261113T142956Z_c91c33`
+  succeeded。不是对活动 MCP 已生效或真实 HPC 推送的声明。
+- `.venv/Scripts/python.exe -m ruff check src tests tools`：通过；`git diff --check`：通过。
+- 扩展 `.venv/Scripts/python.exe -m pytest -m "not integration" -n 2`：
+  **1141 passed / 14 skipped / 1 failed**；失败为未修改的 Windows pilot descendant-heartbeat
+  用例（generation2/8s）。串行 pilot 模块复验在 generation1/8s 也失败；隔离未修改 HEAD
+  ab93527 的 generation1/8s 单测通过，随后修复树该单测也通过。结果与时间敏感性相容，
+  但未证明失败原因；**不宣称全量回归通过，不修改/弱化该测试**。
+- 活动 MCP 重载后真实 HPC managed-push 验收已通过：独立项目推送 42 字节 `proof.txt`，
+  目标 SHA-256 `af346ad286a5790bf397ffedb9aa3cc67c8a6f0974c600d420805e6cb121a264`，
+  报告 `verified=true`；随后独立 benchmark 132 个代码文件及 4 个数据文件推送亦验证通过。
+  未修改共享祖先权限或干预其他任务。
+
+---
+
 > 更新：2026-11-06。**当前工作树离线集成验收通过**，不是已上传/已发布版本。
 > 2026-11-07 晚追加：分区容量与 `MaxTime` 校验、`run reconcile`、失败诊断兜底、
 > 取消后的退出码修正。全套离线回归重跑：**1050 passed / 12 skipped** + **22 passed**。

@@ -6,6 +6,20 @@ behavior, and every entry states the verification boundary.
 
 ## [Unreleased]
 
+### Fixed
+
+- Linux project push now pins directory handles with `O_PATH` where supported,
+  retaining `O_DIRECTORY`, `O_NOFOLLOW` and explicit directory verification.
+  Search-only ancestors (such as shared home roots with mode 0711) no longer
+  need directory-list permission for extraction into a user's writable tree.
+  Platforms without `O_PATH` keep the strict read-only fallback; Windows is
+  unchanged. Permission failures are reported separately from invalid/link
+  failures. Archive validation, fd-relative writes and replacement guards remain.
+  Verification boundary: scoped Windows tests and non-root Linux extraction
+  counterexamples passed; the reloaded MCP completed a verified single-file
+  push and the isolated benchmark code/data push through a real search-only HPC
+  ancestor. See `docs/status.md` for the unrelated full-suite limitation.
+
 ### Added
 
 - The report answers "when" as well as "what": a `When each kind appeared` matrix

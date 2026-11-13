@@ -298,9 +298,14 @@ def directory(root, parts):
                     pass
                 fds.append(pin_windows_directory(path))
             return path, fds
-        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        # Linux path handles pin directories without requiring list permission.
+        # Search-only ancestors (e.g. /public/home mode 0711) are legitimate;
+        # writes still use the verified parent dir_fd and normal DAC checks.
+        flags = getattr(os, 'O_PATH', os.O_RDONLY) | os.O_DIRECTORY | os.O_NOFOLLOW
         fd = os.open('/', flags)
         fds.append(fd)
+        if not stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise ValueError('push ancestor handle is not a directory: /')
         for part in root.split('/')[1:] + parts:
             if not part:
                 continue
@@ -312,9 +317,13 @@ def directory(root, parts):
             # symlinks cannot redirect a regular tar member outside the root.
             try:
                 fd = os.open(part, flags, dir_fd=fd)
+            except PermissionError as exc:
+                raise ValueError('push directory permission denied while opening: ' + part) from exc
             except OSError as exc:
                 raise ValueError('push refuses linked or invalid directory: ' + part) from exc
             fds.append(fd)
+            if not stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise ValueError('push ancestor handle is not a directory: ' + part)
         return fd, fds
     except BaseException:
         for fd in reversed(fds):
