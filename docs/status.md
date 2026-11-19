@@ -41,6 +41,12 @@
   loose=0、residue=0、RCF temp=0，约束面外 90,498 文件 / 53.9 GB；登录节点
   loose=0、RCF temp=0，约束面外 127,329 文件 / 99.6 GB；均 `complete=true`、
   `errors=0`。
+- CI 修复：`tools/release_check.py` 的 MCP 工具数从 31 更新为 33（与
+  `TOOL_SPECS` 一致），同步 README / architecture / agent-guide / status 的当前
+  工具数；`test_release_check.py` 的接受/拒绝参数改为 33/32。此前所有 CI 矩阵
+  都在 artifact gate 失败。验证：`tools/release_check.py --source . --output
+  .tmp/ci-release-local2` 返回 `ok`；完整 CI 单元命令本地 1,172 tests / 0 failed /
+  14 skipped；序列 timeout 用例 22 passed。
 - 回归：`.venv/Scripts/python.exe -m pytest tests/unit -m "not integration" -n 2`
   → 1,141 tests / 0 failed / 11 skipped；`ruff check src tests/unit/test_home_audit.py tests/unit/test_push_temp_cleanup.py` 通过，`git diff --check` 无空白错误。
 - 边界：本次没有扩大 `storage cleanup` 的扫描范围，也没有改全局 `PIP_CACHE_DIR` /
@@ -150,7 +156,7 @@
 修复涵盖清理副本/真实归属/声明输入、路径链接写入、取消身份、环境权限与路径、试跑后代、
 工作量校准与心跳速率、参数保留名、Windows shell 与 Runner 超时；独立复核追加的同 SSH endpoint
 别名与原地 reparse 写入也已补回归。2026-11-06 追加 fetch 目标守卫、副本归属证据与 POSIX
-私有权限；Windows 离线回归重新通过，macOS/Linux 未复跑。当前 MCP 工具数为 31，校准证据版本为 2。
+私有权限；Windows 离线回归重新通过，macOS/Linux 未复跑。当前 MCP 工具数为 33，校准证据版本为 2。
 
 | 项目 | 命令/证据 | 结果 |
 | --- | --- | --- |

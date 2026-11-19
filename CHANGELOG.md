@@ -61,6 +61,12 @@ behavior, and every entry states the verification boundary.
   pip cache under the RCF root, while `~/.cache/pip` and `~/.cache/uv` stayed
   absent; `rcf cache prune` removed the 9 probe files, and the probe
   environment/config were removed afterwards.
+- Release acceptance now expects 33 MCP tools, matching `TOOL_SPECS`. The
+  release check had stayed at 31 after the environment-apply status tools were
+  added, so every CI matrix job failed at the artifact gate even when tests and
+  lint passed. README, architecture and agent-guide counts are updated too.
+  Verification boundary: `tools/release_check.py` returns `ok` locally, and the
+  full CI unit command passes locally.
 
 ### Added
 
