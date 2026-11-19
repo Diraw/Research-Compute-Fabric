@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from ..core.config import Config
 from ..core.errors import NotFound, PermissionDenied, RcfError, UnsupportedOperation
@@ -574,14 +574,21 @@ class EnvironmentManager:
             notes=[*notes, verdict.reason],
         )
 
-    def apply(
+    def preflight_apply(
         self,
         plan: EnvironmentPlan,
         env: EnvironmentSpec,
         node: NodeSpec,
         *,
         confirmed: bool,
-    ) -> list[dict[str, object]]:
+    ) -> str:
+        """Check confirmation, blockers and ownership before any worker starts.
+
+        This is deliberately separate from :meth:`apply`: a background apply must
+        reject an unauthorised prefix in the tool call itself, not minutes later
+        inside a job the caller has to poll.
+        """
+
         self.policy.check("environment.apply")
         self.policy.check_confirmation("environment.apply", confirmed)
         if plan.blockers:
@@ -597,6 +604,18 @@ class EnvironmentManager:
                 hint="declare the directory in [environments].managed_roots, or set managed = true",
                 detail={"env_id": env.id, "node_id": node.id, "path": path},
             )
+        return path
+
+    def apply(
+        self,
+        plan: EnvironmentPlan,
+        env: EnvironmentSpec,
+        node: NodeSpec,
+        *,
+        confirmed: bool,
+        on_step: Callable[[dict[str, object]], None] | None = None,
+    ) -> list[dict[str, object]]:
+        path = self.preflight_apply(plan, env, node, confirmed=confirmed)
         results: list[dict[str, object]] = []
         for step in plan.steps:
             # Reinspect ancestors before each write step. This cannot fence an
@@ -612,6 +631,8 @@ class EnvironmentManager:
                 "output": redact((result.stdout + result.stderr) if result else "")[-800:],
             }
             results.append(record)
+            if on_step is not None:
+                on_step(record)
             if result is None or result.returncode != 0:
                 break
         # Record ownership as soon as the prefix exists, even when the install

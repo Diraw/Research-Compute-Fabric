@@ -16,7 +16,7 @@ import os
 import sqlite3
 import threading
 from collections.abc import Iterable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -138,6 +138,22 @@ CREATE TABLE IF NOT EXISTS environment_verifications (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_env_verification
     ON environment_verifications(env_id, node_id, fingerprint);
+
+CREATE TABLE IF NOT EXISTS environment_applies (
+    apply_id TEXT PRIMARY KEY,
+    env_id TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    finished_at TEXT,
+    plan_json TEXT NOT NULL DEFAULT '{}',
+    results_json TEXT NOT NULL DEFAULT '[]',
+    error_json TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_env_apply_running
+    ON environment_applies(env_id, node_id) WHERE state = 'running';
+CREATE INDEX IF NOT EXISTS ix_env_applies_started ON environment_applies(started_at);
 """
 
 
@@ -566,6 +582,151 @@ class Store:
             }
             for row in rows
         ]
+
+    # -- environment applies ------------------------------------------------- #
+    def create_environment_apply(
+        self, *, apply_id: str, env_id: str, node_id: str, plan: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Start the durable record before the worker touches the node.
+
+        The partial unique index allows one running apply per environment/node;
+        a second start raises ``Conflict`` with the existing ``apply_id`` instead
+        of launching a concurrent install.
+        """
+
+        now = iso(now_utc())
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "INSERT INTO environment_applies"
+                    "(apply_id, env_id, node_id, state, started_at, updated_at, plan_json)"
+                    " VALUES (?,?,?,?,?,?,?)",
+                    (apply_id, env_id, node_id, "running", now, now,
+                     json.dumps(plan, ensure_ascii=False, default=str)),
+                )
+                self._conn.commit()
+        except sqlite3.IntegrityError as exc:
+            existing = self._one(
+                "SELECT apply_id FROM environment_applies"
+                " WHERE env_id = ? AND node_id = ? AND state = 'running'",
+                (env_id, node_id),
+            )
+            if existing is None:
+                raise StoreError(f"cannot record environment apply: {exc}") from exc
+            raise Conflict(
+                "an environment apply is already running for this environment/node",
+                detail={
+                    "env_id": env_id,
+                    "node_id": node_id,
+                    "apply_id": existing["apply_id"] if existing else None,
+                },
+            ) from exc
+        result = self.get_environment_apply(apply_id)
+        assert result is not None
+        return result
+
+    def touch_environment_apply(self, apply_id: str) -> None:
+        """Heartbeat: a running job with no updates for too long is not live."""
+
+        with self._lock:
+            self._conn.execute(
+                "UPDATE environment_applies SET updated_at = ? WHERE apply_id = ? AND state = 'running'",
+                (iso(now_utc()), apply_id),
+            )
+            self._conn.commit()
+
+    def record_environment_apply_step(
+        self, apply_id: str, result: dict[str, Any]
+    ) -> None:
+        row = self._one("SELECT results_json FROM environment_applies WHERE apply_id = ?", (apply_id,))
+        if row is None:
+            return
+        results = json.loads(row["results_json"] or "[]")
+        results.append(result)
+        with self._lock:
+            self._conn.execute(
+                "UPDATE environment_applies SET results_json = ?, updated_at = ? WHERE apply_id = ?",
+                (json.dumps(results, ensure_ascii=False, default=str), iso(now_utc()), apply_id),
+            )
+            self._conn.commit()
+
+    def finish_environment_apply(
+        self,
+        apply_id: str,
+        *,
+        state: str,
+        results: list[dict[str, Any]] | None = None,
+        error: dict[str, Any] | None = None,
+    ) -> None:
+        row = self._one("SELECT results_json FROM environment_applies WHERE apply_id = ?", (apply_id,))
+        if row is None:
+            return
+        stored = json.loads(row["results_json"] or "[]") if results is None else results
+        now = iso(now_utc())
+        with self._lock:
+            self._conn.execute(
+                "UPDATE environment_applies SET state = ?, finished_at = ?, updated_at = ?,"
+                " results_json = ?, error_json = ? WHERE apply_id = ?",
+                (state, now, now,
+                 json.dumps(stored, ensure_ascii=False, default=str),
+                 json.dumps(error, ensure_ascii=False, default=str) if error is not None else None,
+                 apply_id),
+            )
+            self._conn.commit()
+
+    def get_environment_apply(self, apply_id: str) -> dict[str, Any] | None:
+        row = self._one("SELECT * FROM environment_applies WHERE apply_id = ?", (apply_id,))
+        return self._environment_apply_row(row) if row is not None else None
+
+    def list_environment_applies(
+        self, *, env_id: str | None = None, node_id: str | None = None, limit: int = 10
+    ) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit), 100))
+        rows = self._all(
+            "SELECT * FROM environment_applies"
+            " WHERE (? IS NULL OR env_id = ?) AND (? IS NULL OR node_id = ?)"
+            " ORDER BY started_at DESC LIMIT ?",
+            (env_id, env_id, node_id, node_id, limit),
+        )
+        return [self._environment_apply_row(row) for row in rows]
+
+    def reap_stale_environment_applies(self, *, older_than_seconds: float = 300) -> int:
+        """Fail jobs whose control process stopped heart-beating.
+
+        The install itself may still be running on the node; the record says the
+        control plane lost it, which is the truth a caller can act on.
+        """
+
+        cutoff = iso(now_utc() - timedelta(seconds=older_than_seconds))
+        rows = self._all(
+            "SELECT apply_id FROM environment_applies WHERE state = 'running' AND updated_at < ?",
+            (cutoff,),
+        )
+        for row in rows:
+            self.finish_environment_apply(
+                row["apply_id"],
+                state="failed",
+                error={
+                    "code": "stale_apply",
+                    "message": "the control process stopped updating this apply; the node may still be running it",
+                },
+            )
+        return len(rows)
+
+    @staticmethod
+    def _environment_apply_row(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "apply_id": row["apply_id"],
+            "env_id": row["env_id"],
+            "node_id": row["node_id"],
+            "state": row["state"],
+            "started_at": row["started_at"],
+            "updated_at": row["updated_at"],
+            "finished_at": row["finished_at"],
+            "plan": json.loads(row["plan_json"] or "{}"),
+            "results": json.loads(row["results_json"] or "[]"),
+            "error": json.loads(row["error_json"]) if row["error_json"] else None,
+        }
 
     # -- environment verification ------------------------------------------- #
     def record_verification(

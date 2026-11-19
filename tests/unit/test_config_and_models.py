@@ -162,6 +162,14 @@ def test_start_starter_home_is_idempotent(tmp_path):
         ("3.0.0", ">=1.26,<3", False),
         ("2.0.1", "==2.0.1", True),
         ("2.0.0", "!=2.0.0", False),
+        # A bare version is a series; an explicit == is exact.
+        ("3.12.16", "3.12", True),
+        ("3.13.0", "3.12", False),
+        ("3.12.16", "==3.12", False),
+        ("3.12.16", "==3.12.*", True),
+        ("3.12.16", "!=3.12.*", False),
+        ("3.12.16", "~=3.12", True),
+        ("3.13.0", "~=3.12.0", False),
         (None, ">=1", False),
         ("1.2.3", None, True),
     ],
@@ -173,6 +181,10 @@ def test_version_satisfies(version, spec, expected):
 def test_unsupported_version_spec_raises():
     with pytest.raises(ValueError):
         satisfies("1.0", "~1.0")
+    with pytest.raises(ValueError):
+        satisfies("3.12.16", ">=3.12.*")
+    with pytest.raises(ValueError):
+        satisfies("3.12.16", "~=3.12.*")
 
 
 def test_build_command_keeps_parameter_with_spaces_as_one_argument():

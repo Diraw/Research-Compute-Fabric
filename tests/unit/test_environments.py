@@ -94,6 +94,15 @@ def test_python_version_requirement(tmp_path):
     assert any(c.name == "python_version" and c.status == "fail" for c in view.checks)
 
 
+def test_bare_python_version_names_a_series(tmp_path):
+    # "3.12" is the compatibility constraint, not the exact point release.
+    env = VENV.model_copy(update={"python_version": "3.12"})
+    mgr = manager(tmp_path, runner=ScriptedRunner([probe_payload("3.12.16")]))
+    view = mgr.inspect(env, LOCAL)
+    assert view.state == "compatible"
+    assert not any(c.name == "python_version" and c.status == "fail" for c in view.checks)
+
+
 def test_missing_interpreter(tmp_path):
     failure = CommandResult(argv=(), returncode=127, stderr="No such file or directory")
     mgr = manager(tmp_path, runner=ScriptedRunner([failure]))

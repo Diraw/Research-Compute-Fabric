@@ -11,6 +11,8 @@ import platform
 import re
 import shutil
 import sys
+import threading
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -20,6 +22,7 @@ from .core.errors import Conflict, NotFound, RcfError, SpecError, UnsupportedOpe
 from .core.ids import new_id, now_utc
 from .core.models import (
     EnvironmentPlan,
+    EnvironmentSpec,
     EnvironmentView,
     FailureKind,
     NodeKind,
@@ -569,6 +572,63 @@ class RcfService:
         env = self.config.environment(env_id)
         node = self.config.node(node_id)
         plan: EnvironmentPlan = self.environments.plan(env, node)
+        return self._execute_environment_apply(env, node, plan, confirmed=confirmed)
+
+    def start_apply_environment(
+        self, env_id: str, node_id: str, *, confirmed: bool = False
+    ) -> dict[str, Any]:
+        """Start a tracked apply and return immediately.
+
+        MCP clients impose their own tool-call timeout (the local Profer bridge
+        uses 60 seconds), while a conda/pip step may legitimately run for many
+        minutes.  A synchronous call would be abandoned by the client while the
+        node kept installing.  The job record is written first, so a caller can
+        always recover the outcome with :meth:`get_environment_apply`.
+        """
+
+        env = self.config.environment(env_id)
+        node = self.config.node(node_id)
+        plan: EnvironmentPlan = self.environments.plan(env, node)
+        # Fail unauthorised or blocked requests in the call itself; a job that
+        # only fails after the caller polls is harder to act on.
+        self.environments.preflight_apply(plan, env, node, confirmed=confirmed)
+        self.store.reap_stale_environment_applies()
+        apply_id = new_id("envapply")
+        record = self.store.create_environment_apply(
+            apply_id=apply_id,
+            env_id=env.id,
+            node_id=node.id,
+            plan=plan.model_dump(mode="json"),
+        )
+        thread = threading.Thread(
+            target=self._run_environment_apply,
+            args=(apply_id, env, node, plan),
+            name=f"rcf-apply-{apply_id}",
+            daemon=True,
+        )
+        thread.start()
+        return record
+
+    def get_environment_apply(self, apply_id: str) -> dict[str, Any]:
+        record = self.store.get_environment_apply(apply_id)
+        if record is None:
+            raise NotFound(f"environment apply {apply_id!r} not found")
+        return record
+
+    def list_environment_applies(
+        self, *, env_id: str | None = None, node_id: str | None = None, limit: int = 10
+    ) -> list[dict[str, Any]]:
+        return self.store.list_environment_applies(env_id=env_id, node_id=node_id, limit=limit)
+
+    def _execute_environment_apply(
+        self,
+        env: EnvironmentSpec,
+        node: NodeSpec,
+        plan: EnvironmentPlan,
+        *,
+        confirmed: bool,
+        on_step: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         # Record the tier the policy actually enforced (EXECUTE) and the one
         # piece of evidence that decided it.  "environment_mutation" is not a
         # gate for this operation, so auditing it as such misleads both humans
@@ -587,13 +647,74 @@ class RcfService:
                 "requires_authorization": plan.requires_authorization,
             },
         )
-        results = self.environments.apply(plan, env, node, confirmed=confirmed)
+        kwargs: dict[str, Any] = {"confirmed": confirmed}
+        if on_step is not None:
+            # Keep the call compatible with managers that predate step callbacks;
+            # only the tracked MCP apply needs incremental results.
+            kwargs["on_step"] = on_step
+        results = self.environments.apply(plan, env, node, **kwargs)
         return {
             "env_id": env.id,
             "node_id": node.id,
             "plan": plan.model_dump(mode="json"),
             "results": results,
         }
+
+    def _run_environment_apply(
+        self, apply_id: str, env: EnvironmentSpec, node: NodeSpec, plan: EnvironmentPlan
+    ) -> None:
+        store = self.store
+        stop = threading.Event()
+
+        def heartbeat() -> None:
+            # A live worker refreshes updated_at; a killed control process stops,
+            # so the job can be declared stale instead of "running" forever.
+            while not stop.wait(60):
+                try:
+                    store.touch_environment_apply(apply_id)
+                except Exception:  # noqa: BLE001 - heartbeat must not kill the apply
+                    return
+
+        beater = threading.Thread(
+            target=heartbeat, name=f"rcf-apply-beat-{apply_id}", daemon=True
+        )
+        beater.start()
+        try:
+            payload = self._execute_environment_apply(
+                env,
+                node,
+                plan,
+                confirmed=True,
+                on_step=lambda result: store.record_environment_apply_step(apply_id, result),
+            )
+            store.finish_environment_apply(
+                apply_id, state="succeeded", results=payload["results"]
+            )
+            store.record_audit(
+                actor=self.actor,
+                operation="environment.apply",
+                tier="execute",
+                decision="succeeded",
+                node_id=node.id,
+                detail={"env_id": env.id, "apply_id": apply_id},
+            )
+        except Exception as exc:  # noqa: BLE001 - every failure becomes a job outcome
+            error = error_payload(exc)
+            try:
+                store.finish_environment_apply(apply_id, state="failed", error=error)
+                store.record_audit(
+                    actor=self.actor,
+                    operation="environment.apply",
+                    tier="execute",
+                    decision="failed",
+                    node_id=node.id,
+                    detail={"env_id": env.id, "apply_id": apply_id, "error": error},
+                )
+            except Exception:  # noqa: BLE001 - the node result still exists
+                pass
+        finally:
+            stop.set()
+            beater.join(timeout=1)
 
     # -- projects ----------------------------------------------------------- #
     def list_projects(self) -> list[dict[str, Any]]:

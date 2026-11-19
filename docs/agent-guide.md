@@ -86,7 +86,9 @@ env = { RCF_HOME = "C:/Users/you/.rcf" }
 | `compute_inspect_environment` | `compute.inspect_environment` | 无；不执行验证命令 | `rcf env show` |
 | `compute_verify_environment` | `compute.verify_environment` | **有**：需本次 `confirm=true` 与 execute 权限 | `rcf env verify ENV --node NODE --yes` |
 | `compute_plan_environment` | `compute.plan_environment` | 无（只生成计划） | `rcf env plan ENV --node NODE` |
-| `compute_apply_environment` | `compute.apply_environment` | **有**：需 `confirm=true`；只写自己拥有的前缀（`managed_roots` 或 `managed=true`） | `rcf env apply ENV --node NODE --yes` |
+| `compute_apply_environment` | `compute.apply_environment` | **有**：需 `confirm=true`；只写自己拥有的前缀（`managed_roots` 或 `managed=true`）；启动后台作业并立即返回 `apply_id` | `rcf env apply ENV --node NODE --yes`（同步；加 `--background` 启动作业） |
+| `compute_get_environment_apply` | `compute.get_environment_apply` | 无 | `rcf env apply-status APPLY_ID` |
+| `compute_list_environment_applies` | `compute.list_environment_applies` | 无 | `rcf env applies` |
 | `compute_list_projects` | `compute.list_projects` | 无 | `rcf project list` |
 | `compute_plan_run` | `compute.plan_run` | 无（只写一条计划记录） | `rcf run plan` |
 | `compute_submit_run` | `compute.submit_run` | **有**：提交作业、预约 GPU | `rcf run submit --yes` |
@@ -205,6 +207,9 @@ rcf env apply <env> --node <node> --yes   # 执行审阅过的计划；只写自
 ```
 
 Agent 侧对应 `compute_plan_environment` → `compute_apply_environment(confirm=true)`。
+MCP 的 apply 会立即返回 `apply_id`，因为 conda/pip 步骤常超过客户端 60 秒工具超时；
+继续用 `compute_get_environment_apply(apply_id)` 轮询到 `succeeded` 或 `failed`，不要因为调用
+返回就认为安装结束。CLI 的 `rcf env apply` 默认同步等待，`--background` 走同一条作业路径。
 能不能写不取决于 `allow_environment_mutation`（那是旧字段，不参与判定），而取决于
 `[environments].managed_roots` 是否包含该路径、或该环境是否标了 `managed = true`；
 计划被拒时 `blockers` 会给出具体原因。

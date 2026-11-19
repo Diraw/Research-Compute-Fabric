@@ -19,9 +19,29 @@ behavior, and every entry states the verification boundary.
   counterexamples passed; the reloaded MCP completed a verified single-file
   push and the isolated benchmark code/data push through a real search-only HPC
   ancestor. See `docs/status.md` for the unrelated full-suite limitation.
+- A bare version constraint now names a series instead of a point release:
+  `python_version = "3.12"` accepts 3.12.16 while an explicit `==3.12` stays
+  exact. `==`/`!=` also accept the PEP 440 trailing form (`==3.12.*`); ordering
+  operators reject it. Previously a bare spec silently became `==`, so a healthy
+  3.12.16 environment was reported as a `python_version` failure and blocked run
+  submission. Verification boundary: the version matrix and an environment
+  inspection test with a 3.12.16 probe pass; no remote node was re-probed.
+- `compute_apply_environment` now starts a tracked background job and returns its
+  `apply_id` immediately. A conda/pip step can run for minutes while an MCP
+  client's tool-call timeout (the local Profer bridge uses 60 s) is much shorter;
+  the old synchronous tool call was abandoned while the node kept installing.
+  The job row is written before the worker starts, records each completed step,
+  heartbeats while alive, and is marked `stale_apply` if its control process
+  disappears. Unauthorised or blocked plans still fail in the call itself.
+  Verification boundary: offline service/MCP/CLI tests with a fake installer;
+  no live MCP client call was repeated in this round.
 
 ### Added
 
+- `compute_get_environment_apply` / `compute_list_environment_applies` and
+  `rcf env apply-status` / `rcf env applies`: inspect one tracked environment
+  apply or recent jobs without touching the node. `rcf env apply --background`
+  uses the same job path as MCP; the default CLI call still waits synchronously.
 - The report answers "when" as well as "what": a `When each kind appeared` matrix
   counts failures per kind per day, switching to weeks when the window exceeds two
   weeks. Each column carries how many runs finished in that bucket, so a cell reads

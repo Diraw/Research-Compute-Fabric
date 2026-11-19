@@ -315,7 +315,9 @@ def test_mcp_exposes_environment_plan_and_apply(tmp_path):
     specs = {spec.name: spec for spec in TOOL_SPECS}
     assert specs["compute_plan_environment"].read_only is True
     assert specs["compute_apply_environment"].read_only is False
-    assert specs["compute_apply_environment"].service_method == "apply_environment"
+    assert specs["compute_apply_environment"].service_method == "start_apply_environment"
+    assert specs["compute_get_environment_apply"].read_only is True
+    assert specs["compute_list_environment_applies"].read_only is True
 
 
 def call_tool(server, name: str, arguments: dict) -> dict:

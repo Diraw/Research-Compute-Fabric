@@ -37,7 +37,9 @@ Typical flow:
 1. compute_list_nodes / compute_inspect_node — see what exists and what is free.
 2. compute_list_projects + compute_inspect_environment — check the code and environment.
    Missing package? compute_plan_environment shows the exact commands; only then
-   compute_apply_environment(confirm=true). RCF writes only prefixes it owns.
+   compute_apply_environment(confirm=true). It starts a tracked job and returns an
+   apply_id immediately; poll compute_get_environment_apply until it succeeds or
+   fails. RCF writes only prefixes it owns.
 3. compute_plan_run — get a reviewable plan (node, command, checks). No side effects.
 4. compute_submit_run(plan_id, confirm=true) — submit only after the user approves.
 5. compute_get_run / compute_get_run_progress / compute_get_logs / compute_collect_results — follow the run.
@@ -131,13 +133,36 @@ TOOL_SPECS: list[ToolSpec] = [
         name="compute_apply_environment",
         dotted="compute.apply_environment",
         description=(
-            "Execute a reviewed environment plan (conda create/install or venv+pip). Requires "
-            "confirm=true. RCF only writes prefixes it owns (managed_roots or managed=true) and "
-            "refuses plans with blockers; every write is audited."
+            "Start a reviewed environment plan (conda create/install or venv+pip) as a tracked "
+            "job and return its apply_id immediately. Requires confirm=true. RCF only writes "
+            "prefixes it owns (managed_roots or managed=true) and refuses plans with blockers; "
+            "poll compute_get_environment_apply for the result. Every write is audited."
         ),
-        service_method="apply_environment",
+        service_method="start_apply_environment",
         cli_path=("env", "apply"),
         read_only=False,
+    ),
+    ToolSpec(
+        name="compute_get_environment_apply",
+        dotted="compute.get_environment_apply",
+        description=(
+            "Read one tracked environment apply job: state, completed steps and failure evidence. "
+            "Read-only; use the apply_id returned by compute_apply_environment."
+        ),
+        service_method="get_environment_apply",
+        cli_path=("env", "apply-status"),
+        read_only=True,
+    ),
+    ToolSpec(
+        name="compute_list_environment_applies",
+        dotted="compute.list_environment_applies",
+        description=(
+            "List recent environment apply jobs, optionally filtered by environment or node. "
+            "Read-only; useful for recovering an apply whose start response was lost."
+        ),
+        service_method="list_environment_applies",
+        cli_path=("env", "applies"),
+        read_only=True,
     ),
     ToolSpec(
         name="compute_list_projects",
@@ -468,7 +493,11 @@ def build_server(home: str | None = None, *, actor: str = "mcp") -> MCPServer:
         return await runtime.run(runtime.service.plan_environment, env_id, node_id)
 
     async def compute_apply_environment(env_id: str, node_id: str, confirm: bool = False) -> str:
-        """Execute a reviewed environment plan (conda/venv install or completion).
+        """Start a tracked environment apply and return its apply_id immediately.
+
+        A conda/pip install can take minutes; keeping the MCP request open would
+        hit the client's tool-call timeout while the node kept installing.  Poll
+        compute_get_environment_apply until the job is succeeded or failed.
 
         Args:
             env_id: Environment id as declared in environments.toml.
@@ -478,7 +507,22 @@ def build_server(home: str | None = None, *, actor: str = "mcp") -> MCPServer:
                 it does not own and any plan with blockers.
         """
         return await runtime.run(
-            runtime.service.apply_environment, env_id, node_id, confirmed=confirm
+            runtime.service.start_apply_environment, env_id, node_id, confirmed=confirm
+        )
+
+    async def compute_get_environment_apply(apply_id: str) -> str:
+        """Read one environment apply job without touching the node."""
+        return await runtime.run(runtime.service.get_environment_apply, apply_id)
+
+    async def compute_list_environment_applies(
+        env_id: str | None = None,
+        node_id: str | None = None,
+        limit: Annotated[int, Field(ge=1, le=100, strict=True)] = 10,
+    ) -> str:
+        """List recent environment apply jobs, newest first."""
+        return await runtime.run(
+            runtime.service.list_environment_applies,
+            env_id=env_id, node_id=node_id, limit=limit,
         )
 
     async def compute_list_projects() -> str:
@@ -771,6 +815,8 @@ def build_server(home: str | None = None, *, actor: str = "mcp") -> MCPServer:
         "compute_verify_environment": compute_verify_environment,
         "compute_plan_environment": compute_plan_environment,
         "compute_apply_environment": compute_apply_environment,
+        "compute_get_environment_apply": compute_get_environment_apply,
+        "compute_list_environment_applies": compute_list_environment_applies,
         "compute_list_projects": compute_list_projects,
         "compute_plan_run": compute_plan_run,
         "compute_submit_run": compute_submit_run,

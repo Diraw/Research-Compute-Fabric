@@ -539,6 +539,9 @@ def env_apply(
     env_id: str = typer.Argument(...),
     node_id: str = typer.Option(..., "--node"),
     yes: bool = typer.Option(False, "--yes", help="Confirm the mutation."),
+    background: bool = typer.Option(
+        False, "--background", help="Start a tracked job and return its apply_id immediately."
+    ),
 ) -> None:
     """Execute a previously reviewed environment plan (needs opt-in in config)."""
     state = _state(ctx)
@@ -549,8 +552,72 @@ def env_apply(
             if result["output"]:
                 typer.echo(f"      {result['output'][:300]}")
 
+    def started(payload: dict[str, Any]) -> None:
+        typer.echo(f"apply {payload['apply_id']} — {payload['state']}")
+        typer.echo("poll with: rcf env apply-status " + payload["apply_id"])
+
+    service = _service(state)
     with _errors(state):
-        _emit(state, _service(state).apply_environment(env_id, node_id, confirmed=yes), human)
+        if background:
+            _emit(state, service.start_apply_environment(env_id, node_id, confirmed=yes), started)
+        else:
+            _emit(state, service.apply_environment(env_id, node_id, confirmed=yes), human)
+
+
+@env_app.command("apply-status")
+def env_apply_status(
+    ctx: typer.Context,
+    apply_id: str = typer.Argument(...),
+) -> None:
+    """Show one tracked environment apply job (does not touch the node)."""
+    state = _state(ctx)
+
+    def human(payload: dict[str, Any]) -> None:
+        typer.echo(
+            f"apply {payload['apply_id']} — {payload['state']} "
+            f"({payload['env_id']} on {payload['node_id']})"
+        )
+        for result in payload["results"]:
+            typer.echo(f"  [{result['returncode']}] {result['description']}")
+            if result["output"]:
+                typer.echo(f"      {result['output'][:300]}")
+        if payload.get("error"):
+            typer.secho(f"  error: {payload['error'].get('message')}", fg="red")
+
+    with _errors(state):
+        _emit(state, _service(state).get_environment_apply(apply_id), human)
+
+
+@env_app.command("applies")
+def env_applies(
+    ctx: typer.Context,
+    env_id: str | None = typer.Option(None, "--env", help="Filter by environment id."),
+    node_id: str | None = typer.Option(None, "--node", help="Filter by node id."),
+    limit: int = typer.Option(10, "--limit", min=1, max=100),
+) -> None:
+    """List recent environment apply jobs, newest first."""
+    state = _state(ctx)
+
+    def human(rows: list[dict[str, Any]]) -> None:
+        render.table(
+            ["apply", "env", "node", "state", "started"],
+            [
+                [
+                    row["apply_id"], row["env_id"], row["node_id"],
+                    row["state"], row["started_at"],
+                ]
+                for row in rows
+            ],
+        )
+
+    with _errors(state):
+        _emit(
+            state,
+            _service(state).list_environment_applies(
+                env_id=env_id, node_id=node_id, limit=limit
+            ),
+            human,
+        )
 
 
 @project_app.command("push")

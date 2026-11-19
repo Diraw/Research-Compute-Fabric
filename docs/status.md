@@ -1,5 +1,22 @@
 # 功能完成度与验收状态
 
+## 2026-11-19：版本约束与 MCP apply 超时修复（工作树）
+
+- `python_version = "3.12"` 现在按 3.12 系列匹配（3.12.16 通过）；显式 `==3.12`
+  仍是精确匹配，`==`/`!=` 支持 `3.12.*`，排序操作符拒绝通配符。
+  验证：`tests/unit/test_config_and_models.py` 版本矩阵与
+  `tests/unit/test_environments.py::test_bare_python_version_names_a_series` 通过。
+- `compute_apply_environment` 改为先写 `environment_applies` 记录、再启动后台线程，
+  MCP 调用立即返回 `apply_id`；新增 `compute_get_environment_apply`、
+  `compute_list_environment_applies` 与 CLI `env apply-status` / `env applies` /
+  `env apply --background`。作业逐步记录结果、心跳保活，控制进程消失后 5 分钟标记
+  `stale_apply`。
+  验证：`tests/unit/test_environment_apply_jobs.py`（含 2 秒伪安装在 16 ms 内返回、
+  轮询到 succeeded）、相关 MCP/CLI 表面测试通过；
+  `tests/unit -m "not integration" -n 2` → **1106 passed / 11 skipped**。
+- 未重复真实 MCP 客户端调用，也未重新探测远端节点；`tests/e2e` 中依赖 lab-hpc 的
+  用例仍因 45 秒 probe 超时失败，与本次改动无关。
+
 ## 2026-11-13：search-only 祖先目录推送修复（已合入 main）
 
 - 分支 `fix/search-only-ancestors-20261113`；仅修 Linux 安全提取器目录句柄：
