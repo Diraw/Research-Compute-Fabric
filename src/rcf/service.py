@@ -36,6 +36,8 @@ from .core.models import (
 from .core.runner import Runner, SubprocessRunner
 from .environments.manager import EnvironmentManager
 from .projects.service import ProjectService
+from .resources.cache_maintenance import CacheManager
+from .resources.home_audit import HomeAuditor
 from .resources.inspector import ResourceInspector, gpu_key
 from .runs.diff import compare_runs
 from .runs.manager import RunManager, state_age_seconds
@@ -384,6 +386,63 @@ class RcfService:
             detail={"checks": [c.name for c in outcome.checks if c.status.value == "fail"]},
         )
         return outcome.to_dict()
+
+    def audit_home(
+        self,
+        node_id: str,
+        *,
+        max_entries: int = 300_000,
+        max_seconds: float = 120.0,
+    ) -> dict[str, Any]:
+        """Read-only footprint outside RCF's managed and registered roots."""
+
+        node = self.config.node(node_id)
+        return HomeAuditor(self.config, self.runner).audit(
+            node, max_entries=max_entries, max_seconds=max_seconds
+        )
+
+    def prune_cache(
+        self,
+        node_id: str,
+        *,
+        older_than_seconds: int = 30 * 86400,
+        max_bytes: int = 5 * 1024**3,
+        apply: bool = False,
+    ) -> dict[str, Any]:
+        """Preview or delete files under RCF's own install-cache root."""
+
+        self.config.policy().check("cache.prune")
+        node = self.config.node(node_id)
+        if apply:
+            running = [
+                row for row in self.store.list_environment_applies(node_id=node.id, limit=20)
+                if row.get("state") == "running"
+            ]
+            if running:
+                raise Conflict(
+                    "an environment apply is running on this node; refusing to prune its cache",
+                    detail={"node": node.id, "apply_id": running[0].get("apply_id")},
+                )
+        result = CacheManager(self.config, self.runner).prune(
+            node,
+            older_than_seconds=older_than_seconds,
+            max_bytes=max_bytes,
+            apply=apply,
+        )
+        if apply and result["deleted_files"]:
+            self.store.record_audit(
+                actor=self.actor,
+                operation="cache.prune",
+                tier="execute",
+                decision="allowed",
+                node_id=node.id,
+                detail={
+                    "root": result["root"],
+                    "deleted_files": result["deleted_files"],
+                    "deleted_bytes": result["deleted_bytes"],
+                },
+            )
+        return result
 
     def inspect_node(self, node_id: str, *, refresh: bool = False) -> dict[str, Any]:
         node = self.config.node(node_id)

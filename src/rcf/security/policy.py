@@ -53,6 +53,8 @@ OPERATION_TIERS: dict[str, PermissionTier] = {
     # Removes an exclusion that a dead operation left behind: execute tier,
     # confirmed, and audited with the guard's own evidence.
     "storage.release_guard": PermissionTier.EXECUTE,
+    # Deletes only files under RCF's own install-cache root; dry-run is the default.
+    "cache.prune": PermissionTier.EXECUTE,
     "run.fetch": PermissionTier.EXECUTE,
     "run.submit": PermissionTier.EXECUTE,
     "run.cancel": PermissionTier.EXECUTE,

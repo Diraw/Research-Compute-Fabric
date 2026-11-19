@@ -1,5 +1,52 @@
 # 功能完成度与验收状态
 
+## 2026-11-20：push 临时归档自清理 + 家目录只读审计（工作树）
+
+- `project push` 的远端 staging 归档不再依赖成功路径删除：上传或提取失败时
+  `finally` 会 best-effort 执行 `rm -f`，下一次 push 还会按 24 小时年龄清扫
+  `~/.rcf-tmp/.rcf-push-*.tar.gz`。只匹配 RCF 自己的文件名前缀，24 小时内的
+  并发 push 不受影响。
+  验证：新增 `tests/unit/test_push_temp_cleanup.py` 6 个用例（清扫命令、清扫失败
+  不致命、提取失败仍删除、传输失败仍尝试删除）；`test_project_push.py`、
+  `test_push_integrity.py`、`test_push_search_only_ancestors.py` 全部通过。
+- 新增 CLI-only 只读命令 `rcf node audit-home NODE`：跳过 work root、managed
+  env roots、已登记项目/环境路径和 `miniforge3`/`miniconda3`/`anaconda3`，只遍历
+  约束面外，报告松散一级文件、可再生缓存、`__pycache__`/`*.pyc`、未登记 env 树、
+  RCF 临时文件和最大的未登记目录；`--max-entries` / `--max-seconds` 限制开销。
+  不删除、不写台账、不暴露为 MCP 工具。
+  验证：`tests/unit/test_home_audit.py` 3 个用例通过（同一内嵌脚本在临时目录树
+  上实际执行）；`test_cli_and_mcp.py` 通过。真实只读运行：一台 SSH 工作站 109,518 个
+  约束面外文件 / 63.5 GB，1.13 秒；一台 Slurm 登录节点 128,120 个 / 100.9 GB，29.35 秒；
+  两台均 `complete=true`、`errors=0`。后者的 `~/.rcf-tmp` 中 6 个过期
+  `.rcf-push-*.tar.gz`（41 MB）被识别，前者为 0；未删除任何文件。
+- P2：`environment.apply` 的 mutating 步骤注入 `PIP_CACHE_DIR` / `UV_CACHE_DIR` /
+  `CONDA_PKGS_DIRS`，指向 `~/.rcf-tmp/cache`（远端）或 `<RCF_HOME>/cache`（本机）；
+  只影响 RCF 拉起的安装命令。新增 CLI-only `rcf cache prune --node NODE`：默认 dry-run，
+  `--older-than` / `--max-size` 选文件，`--yes` 才删，只清 RCF 缓存根；删除前复核
+  size/mtime，symlink 根直接拒绝，节点有运行中的 env apply 时拒绝删除。
+  验证：`tests/unit/test_cache_maintenance.py` 8 个用例、环境与 CLI/MCP 回归通过；
+  两台真实节点 dry-run 均返回空/不存在的缓存根，未删除任何文件；另在一台 SSH
+  工作站的 RCF 缓存根放入 14 B / 40 天临时文件，dry-run `selected=1`、`deleted=0`，
+  `--yes` 后 `deleted=1`。真实安装探针：临时 venv 通过 RCF 安装 `packaging`
+  成功，RCF 缓存根出现 9 个文件 / 193,698 B，`~/.cache/pip` 与 `~/.cache/uv`
+  均不存在；`cache prune --max-size 1 --yes` 删除 9 个 / 193,698 B；探针环境、
+  缓存和临时配置已删除并恢复。
+- P3（按清单执行的真实清理）：工作站删除 pip 缓存 8,820,697,114 B、`mf.sh`
+  128,128,881 B、2,704 个 `__pycache__`（18,369 文件 / 352,723,968 B）；31 个
+  一级松散文件和 2 个 dryrun 日志移入 `~/rcf/archive/20261120`（327 MB）。
+  登录节点删除 pip 缓存 1,165,490,904 B、`miniforge3.sh` 128,128,881 B、6 个过期
+  `.rcf-push-*.tar.gz`（42,447,041 B）；10 个一级松散文件移入同一归档（2.6 MB）。
+  `.local` 保留：其中的 cupy/numpy/scipy 仍被已有项目测试 import；`.npm`、`.codex`、
+  HuggingFace/torch 缓存、`models/` 和活跃训练目录均未动。清理后审计：工作站
+  loose=0、residue=0、RCF temp=0，约束面外 90,498 文件 / 53.9 GB；登录节点
+  loose=0、RCF temp=0，约束面外 127,329 文件 / 99.6 GB；均 `complete=true`、
+  `errors=0`。
+- 回归：`.venv/Scripts/python.exe -m pytest tests/unit -m "not integration" -n 2`
+  → 1,141 tests / 0 failed / 11 skipped；`ruff check src tests/unit/test_home_audit.py tests/unit/test_push_temp_cleanup.py` 通过，`git diff --check` 无空白错误。
+- 边界：本次没有扩大 `storage cleanup` 的扫描范围，也没有改全局 `PIP_CACHE_DIR` /
+  `PYTHONPYCACHEPREFIX`；审计结果中的 `models/`、旧实验目录和 `wujie-work/` 是
+  未登记资产而非自动可删噪音。
+
 ## 2026-11-19：版本约束与 MCP apply 超时修复（工作树）
 
 - `python_version = "3.12"` 现在按 3.12 系列匹配（3.12.16 通过）；显式 `==3.12`

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 import shlex
 from collections.abc import Callable, Sequence
 
@@ -106,6 +107,29 @@ class EnvironmentManager:
         from ..core.nodeops import NodeOps
 
         self.ops = NodeOps(runner)
+
+    def install_cache_env(self, node: NodeSpec) -> dict[str, str]:
+        """Package-manager caches used only by RCF-spawned install steps.
+
+        Keeping pip/uv/conda downloads under RCF's own cache root means a later
+        prune has an exact, attributable boundary.  User shells and manual
+        installs keep their normal cache locations.
+        """
+
+        if node.kind is NodeKind.LOCAL:
+            base = str(self.config.home / "cache")
+            join = os.path.join
+        else:
+            home = self.ops.home_dir(node)
+            if not home:
+                return {}
+            base = posixpath.join(home.rstrip("/"), ".rcf-tmp", "cache")
+            join = posixpath.join
+        return {
+            "PIP_CACHE_DIR": join(base, "pip"),
+            "UV_CACHE_DIR": join(base, "uv"),
+            "CONDA_PKGS_DIRS": join(base, "conda-pkgs"),
+        }
 
     # -- ownership ---------------------------------------------------------- #
     def _ownership(self, env: EnvironmentSpec, node: NodeSpec, path: str) -> PrefixVerdict:
@@ -623,7 +647,8 @@ class EnvironmentManager:
             inspection = self._inspect_path(node, path)
             if inspection.blocked:
                 raise PermissionDenied(inspection.reason, detail={"env_id": env.id, "path": path})
-            result = self._run_argv(env, node, step.command, timeout=1800)
+            cache_env = self.install_cache_env(node) if step.mutating else None
+            result = self._run_argv(env, node, step.command, timeout=1800, extra_env=cache_env)
             record = {
                 "description": step.description,
                 "command": list(step.command),
@@ -712,15 +737,25 @@ class EnvironmentManager:
         return self._run_argv(env, node, [*interpreter, "-c", script], timeout=120)
 
     def _run_argv(
-        self, env: EnvironmentSpec, node: NodeSpec, argv: Sequence[str], *, timeout: float
+        self,
+        env: EnvironmentSpec,
+        node: NodeSpec,
+        argv: Sequence[str],
+        *,
+        timeout: float,
+        extra_env: dict[str, str] | None = None,
     ) -> CommandResult | None:
-        preamble = self.preamble(env, node)
-        preamble += [f"export {key}={shquote(value)}" for key, value in sorted(env.env_vars.items())]
+        activation = self.preamble(env, node)
+        exports = dict(extra_env or {})
+        exports.update(env.env_vars)
+        export_lines = [f"export {key}={shquote(value)}" for key, value in sorted(exports.items())]
         if node.kind is NodeKind.LOCAL:
-            if preamble:
+            if activation:
+                preamble = [*activation, *export_lines]
                 return self.runner.run(["bash", "-lc", "\n".join(preamble) + "\n" + join_command(argv)], timeout=timeout)
-            return self.runner.run(list(argv), timeout=timeout)
+            return self.runner.run(list(argv), timeout=timeout, env=exports or None)
         transport = SshTransport.from_node(node, self.runner)
+        preamble = [*activation, *export_lines]
         command = "\n".join([*preamble, join_command(argv)]) if preamble else join_command(argv)
         return transport.run(command, timeout=timeout)
 

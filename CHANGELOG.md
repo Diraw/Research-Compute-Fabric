@@ -44,6 +44,23 @@ behavior, and every entry states the verification boundary.
   Verification boundary: parser and scheduling tests pass, and a live ws-ubuntu
   probe (RTX 4090, 392 MB gnome-remote-desktop, 23 GB free) now reports gpu0
   available instead of occupied.
+- Push no longer leaves its remote staging archive behind when an upload or
+  extraction fails, and the next push reclaims `.rcf-push-*.tar.gz` files older
+  than 24 hours in `~/.rcf-tmp`. Only RCF's own staging name inside that
+  directory is considered; successful pushes and concurrent transfers are
+  unchanged. Verification boundary: focused fake-transport tests cover
+  extraction failure, transfer failure and the age-bounded sweep; existing push
+  tests pass.
+- Environment install steps now direct pip, uv and conda caches to RCF's own
+  cache root (`~/.rcf-tmp/cache` on a node, `<RCF_HOME>/cache` on the controller)
+  instead of the user's global `~/.cache`. Only RCF-spawned mutation steps get
+  these variables; user shells and manual installs keep their normal locations,
+  and a cache directory that is a symlink is refused rather than followed.
+  Verification boundary: cache-path, dry-run, age/size and symlink tests pass.
+  A disposable live venv on an SSH workstation installed through RCF with its
+  pip cache under the RCF root, while `~/.cache/pip` and `~/.cache/uv` stayed
+  absent; `rcf cache prune` removed the 9 probe files, and the probe
+  environment/config were removed afterwards.
 
 ### Added
 
@@ -56,6 +73,25 @@ behavior, and every entry states the verification boundary.
   weeks. Each column carries how many runs finished in that bucket, so a cell reads
   against its denominator. Beyond twelve buckets the older history folds into one
   `earlier` column instead of disappearing, and the note says what it covers.
+- `rcf cache prune --node NODE` (CLI-only): previews by default and deletes only
+  files under RCF's own install-cache root with `--yes`. Supports
+  `--older-than` and `--max-size`, selects oldest files until the size target is
+  met, re-checks size/mtime before unlinking, and refuses a symlinked cache
+  root. It refuses to delete while a live environment apply is running on the
+  node.
+  Verification boundary: dry-run/apply, size-rule and symlink tests pass; live
+  dry-runs on both configured remote nodes return an empty/missing cache without
+  deleting anything.
+- `rcf node audit-home NODE` (CLI-only, read-only): walks the parts of a node's
+  home that are outside RCF's work root, managed environment roots and
+  registered project/environment paths, and reports loose root files,
+  regenerable caches, `__pycache__`/`*.pyc`, unregistered env trees, RCF temp
+  files and the largest unmanaged trees. It prunes registered roots and
+  `miniforge3`/`miniconda3`/`anaconda3`, never deletes or adopts, and is bounded
+  by `--max-entries`/`--max-seconds`. Verification boundary: the same embedded
+  script is executed locally against a fixture tree; live read-only runs on
+  ws-ubuntu and lab-hpc completed in about 1 s and 29 s. It is not exposed as an
+  MCP tool and cannot mutate storage.
 - `rcf storage guards` and `rcf storage unguard <guard>... --yes`: a guard has no
   expiry, so an interrupted fetch or cleanup keeps its roots locked forever. These
   show what is holding them and release it deliberately, with the guard's own

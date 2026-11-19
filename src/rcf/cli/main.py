@@ -26,6 +26,8 @@ from ..core.config import Config, default_home, write_starter_home
 from ..core.errors import NotFound, RcfError
 from ..core.ids import parse_iso
 from ..core.models import RunRequest
+from ..resources.cache_maintenance import parse_duration, parse_size
+from ..resources.home_audit import format_bytes
 from ..service import RcfService
 from . import render
 
@@ -48,6 +50,7 @@ env_app = typer.Typer(no_args_is_help=True, help="Inspect environments and plan 
 run_app = typer.Typer(no_args_is_help=True, help="Plan, submit and observe runs.")
 storage_app = typer.Typer(no_args_is_help=True, help="Inspect storage and review exact-file cleanup/adoption plans.")
 db_app = typer.Typer(no_args_is_help=True, help="Local state database.")
+cache_app = typer.Typer(no_args_is_help=True, help="Inspect and prune RCF-owned install caches.")
 mcp_app = typer.Typer(no_args_is_help=True, help="MCP server for Agents.")
 
 app.add_typer(node_app, name="node")
@@ -55,6 +58,7 @@ app.add_typer(project_app, name="project")
 app.add_typer(env_app, name="env")
 app.add_typer(run_app, name="run")
 app.add_typer(storage_app, name="storage")
+app.add_typer(cache_app, name="cache")
 app.add_typer(db_app, name="db")
 app.add_typer(mcp_app, name="mcp")
 
@@ -299,6 +303,72 @@ def node_inspect(
 
     with _errors(state):
         _emit(state, _service(state).inspect_node(node_id, refresh=refresh), human)
+
+
+@node_app.command("audit-home")
+def node_audit_home(
+    ctx: typer.Context,
+    node_id: str = typer.Argument(...),
+    max_entries: int = typer.Option(
+        300_000, "--max-entries", help="Stop after this many regular files."
+    ),
+    max_seconds: float = typer.Option(
+        120.0, "--max-seconds", help="Stop walking after this many seconds."
+    ),
+) -> None:
+    """Inventory a home directory outside RCF roots (read-only)."""
+    state = _state(ctx)
+
+    def human(payload: dict[str, Any]) -> None:
+        skipped = payload["skipped"]
+        render.kv_block(
+            f"node {payload['node_id']} — home audit (read-only)",
+            [
+                ("home", payload["home"]),
+                ("outside RCF", f"{payload['unmanaged']['files']:,} / "
+                 f"{format_bytes(payload['unmanaged']['bytes'])}"),
+                ("RCF temp", f"{payload['rcf_temp']['files']:,} / "
+                 f"{format_bytes(payload['rcf_temp']['bytes'])}"),
+                ("complete", "yes" if payload["complete"]
+                 else f"no ({payload['truncated']})"),
+                ("skipped roots", f"{len(skipped['managed'])} managed, "
+                 f"{len(skipped['known'])} registered, "
+                 f"{len(skipped['toolchains'])} toolchain"),
+            ],
+        )
+        rows: list[list[Any]] = [
+            ["loose root files", f"{payload['loose_root_files']['files']:,}",
+             format_bytes(payload["loose_root_files"]["bytes"])],
+        ]
+        for cache in payload["caches"][:8]:
+            rows.append([cache["path"], f"{cache['files']:,}", format_bytes(cache["bytes"])])
+        for environment in payload["unmanaged_envs"][:6]:
+            rows.append([environment["path"], f"{environment['files']:,}",
+                         format_bytes(environment["bytes"])])
+        rows.append(["python build residue", f"{payload['python_build_residue']['files']:,}",
+                     format_bytes(payload["python_build_residue"]["bytes"])])
+        rows.append(["RCF temp", f"{payload['rcf_temp']['files']:,}",
+                     format_bytes(payload["rcf_temp"]["bytes"])])
+        render.table(["unmanaged candidate", "files", "size"], rows)
+        if payload["unmanaged_trees"]:
+            render.table(
+                ["unmanaged tree", "files", "size"],
+                [
+                    [row["path"], f"{row['files']:,}", format_bytes(row["bytes"])]
+                    for row in payload["unmanaged_trees"][:12]
+                ],
+            )
+        for warning in payload["warnings"]:
+            typer.echo(f"  warning: {warning}")
+
+    with _errors(state):
+        _emit(
+            state,
+            _service(state).audit_home(
+                node_id, max_entries=max_entries, max_seconds=max_seconds
+            ),
+            human,
+        )
 
 
 @node_app.command("selftest")
@@ -1745,6 +1815,52 @@ def run_events(
 # --------------------------------------------------------------------------- #
 # db / mcp
 # --------------------------------------------------------------------------- #
+
+
+@cache_app.command("prune")
+def cache_prune(
+    ctx: typer.Context,
+    node_id: str = typer.Option(..., "--node", help="Node whose RCF cache is pruned."),
+    older_than: str = typer.Option(
+        "30d", "--older-than", help="Select files older than this (0 disables the age rule)."
+    ),
+    max_size: str = typer.Option(
+        "5G", "--max-size", help="Keep the cache under this size (0 disables the size rule)."
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Delete the selected files; default is a dry run."),
+) -> None:
+    """Preview or delete files under RCF's own install-cache root."""
+    state = _state(ctx)
+
+    def human(payload: dict[str, Any]) -> None:
+        mode = "apply" if payload["apply"] else "dry-run"
+        render.kv_block(
+            f"node {payload['node_id']} — RCF cache prune ({mode})",
+            [
+                ("root", payload["root"]),
+                ("cache", f"{payload['files']:,} / {format_bytes(payload['bytes'])}"),
+                ("selected", f"{payload['selected_files']:,} / "
+                 f"{format_bytes(payload['selected_bytes'])}"),
+                ("deleted", f"{payload['deleted_files']:,} / "
+                 f"{format_bytes(payload['deleted_bytes'])}"),
+                ("changed since scan", payload["changed_files"]),
+                ("errors", payload["errors"]),
+            ],
+        )
+        if not payload["apply"]:
+            typer.echo("  dry run: nothing was deleted; re-run with --yes to apply")
+
+    with _errors(state):
+        _emit(
+            state,
+            _service(state).prune_cache(
+                node_id,
+                older_than_seconds=parse_duration(older_than),
+                max_bytes=parse_size(max_size),
+                apply=yes,
+            ),
+            human,
+        )
 
 
 @db_app.command("path")

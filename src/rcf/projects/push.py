@@ -75,6 +75,10 @@ MTIME_TOLERANCE_S = 300.0
 MAX_PUSH_BYTES = 2 * 1024**3
 HASH_BATCH_SIZE = 128
 
+#: A push normally finishes in minutes.  Staging archives older than this can
+#: only belong to an interrupted push, so the next push may reclaim them.
+STALE_PUSH_ARCHIVE_HOURS = 24
+
 
 def _is_excluded(relative: str, patterns: list[str]) -> bool:
     parts = relative.split("/")
@@ -390,6 +394,29 @@ def extract(root, archive, paths):
 '''
 
 
+def _sweep_push_archives(transport, staging: str, *, max_age_hours: int = STALE_PUSH_ARCHIVE_HOURS) -> int:
+    """Remove RCF's own staging archives left by an interrupted push.
+
+    Only ``.rcf-push-*.tar.gz`` directly inside the staging directory is
+    touched.  A live push cannot be that old: it uses a unique name and the
+    whole transfer has bounded timeouts.  A failed sweep must never fail the
+    push itself; the next attempt will try again.
+    """
+
+    minutes = max(1, int(max_age_hours * 60))
+    result = transport.run(
+        f"find {shquote(staging)} -maxdepth 1 -type f -name '.rcf-push-*.tar.gz' "
+        f"-mmin +{minutes} -delete -print 2>/dev/null | wc -l",
+        timeout=120,
+    )
+    if not result.ok:
+        return 0
+    try:
+        return int(result.stdout.strip().split()[-1])
+    except (IndexError, ValueError):
+        return 0
+
+
 class ProjectPusher:
     def __init__(self, config, runner: Runner, *, node_ops: NodeOps | None = None) -> None:
         self.config = config
@@ -694,11 +721,13 @@ class ProjectPusher:
                     f"cannot create push staging on {target.id!r}: "
                     f"{redact(created.first_error_line())}"
                 )
+            _sweep_push_archives(transport, remote_stage)
 
         archive_name = f".rcf-push-{new_id('push')}.tar.gz"
         stage = self.config.home / "tmp"
         stage.mkdir(parents=True, exist_ok=True)
         local_archive = stage / archive_name
+        remote_archive: str | None = None
         expected: dict[str, str] = {}
         archive_digest: str | None = None
 
@@ -728,9 +757,15 @@ class ProjectPusher:
                         f"extracting the archive failed on {target.id!r}: "
                         f"{redact(extracted.stderr.strip())[-1000:]}"
                     )
-                transport.run(f"rm -f {shquote(remote_archive)}", timeout=60)
         finally:
             local_archive.unlink(missing_ok=True)
+            if remote_archive is not None and transport is not None:
+                # Best effort: the connection may already be gone.  The next
+                # push sweeps this archive by age if this call cannot.
+                try:
+                    transport.run(f"rm -f {shquote(remote_archive)}", timeout=60)
+                except Exception:
+                    pass
 
         received = (
             self._hash_local(Path(plan.target_root), send)
