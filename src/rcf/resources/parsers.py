@@ -185,6 +185,41 @@ def parse_nvidia_smi_apps(text: str) -> list[GpuProcess]:
     return processes
 
 
+def parse_nvidia_smi_process_types(text: str) -> dict[tuple[int, int], str]:
+    """Parse ``nvidia-smi pmon -c 1`` into ``(gpu_index, pid) -> C|G|C+G``.
+
+    pmon's command column is truncated and may contain spaces; only the first
+    three columns are stable.  Unsupported drivers print an error, which yields
+    an empty map and leaves the process type unknown.
+    """
+
+    types: dict[tuple[int, int], str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) < 3 or not parts[0].isdigit() or not parts[1].isdigit():
+            continue
+        if parts[2] not in {"C", "G", "C+G", "G+C"}:
+            continue
+        types[(int(parts[0]), int(parts[1]))] = parts[2]
+    return types
+
+
+def attach_process_types(
+    gpus: Iterable[GpuInfo], types: dict[tuple[int, int], str]
+) -> list[GpuInfo]:
+    """Attach pmon context types to the processes already grouped by GPU."""
+
+    gpu_list = list(gpus)
+    for gpu in gpu_list:
+        for process in gpu.processes:
+            if process.pid is not None:
+                process.process_type = types.get((gpu.index, process.pid))
+    return gpu_list
+
+
 def attach_processes(gpus: Iterable[GpuInfo], processes: Iterable[GpuProcess]) -> list[GpuInfo]:
     """Attach compute processes to their GPU by uuid (fallback: single GPU)."""
 

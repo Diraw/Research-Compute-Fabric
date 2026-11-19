@@ -73,6 +73,10 @@ def build_probe_script(*, include_slurm: bool = True) -> str:
         'echo "@@gpu_apps"',
         "nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory "
         "--format=csv,noheader,nounits 2>&1 || true",
+        'echo "@@gpu_proc_types"',
+        # pmon is the only nvidia-smi view that reports C/G/C+G context types;
+        # older drivers may not support it, so the section is optional.
+        "nvidia-smi pmon -c 1 2>&1 || true",
         'echo "@@python"',
         "command -v python3 2>/dev/null || command -v python 2>/dev/null || true",
         'echo "@@slurm_tool"',
@@ -218,13 +222,17 @@ def assemble_snapshot(
         if gpus:
             apps = parsers.parse_nvidia_smi_apps(sections.get("gpu_apps", ""))
             gpus = parsers.attach_processes(gpus, apps)
+            process_types = parsers.parse_nvidia_smi_process_types(
+                sections.get("gpu_proc_types", "")
+            )
+            gpus = parsers.attach_process_types(gpus, process_types)
             gpu_status = ProbeStatus.OK
             busy = sum(1 for g in gpus if g.processes)
             checks.append(
                 Check(
                     name="gpu",
                     status=ProbeStatus.OK,
-                    detail=f"{len(gpus)} GPU(s), {busy} with active compute processes",
+                    detail=f"{len(gpus)} GPU(s), {busy} with active GPU processes",
                     data={"driver": gpus[0].driver_version},
                 )
             )

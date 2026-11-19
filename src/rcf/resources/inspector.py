@@ -15,6 +15,7 @@ from ..core.config import Config
 from ..core.models import (
     Check,
     GpuInfo,
+    GpuProcess,
     GpuSchedulability,
     GpuSchedulabilityStatus,
     NodeKind,
@@ -29,6 +30,57 @@ from .probes import LocalProbe, PosixRemoteProbe, ProbeOutcome
 
 #: Shared-memory use above this fraction counts as "the device is in use".
 GPU_MEMORY_BUSY_FRACTION = 0.05
+
+#: Display/session processes that can hold a GPU context without being jobs.
+#: Matched against the executable basename, case-insensitively.
+GPU_DISPLAY_PROCESS_PATTERNS = (
+    "gnome-remote-desktop",
+    "gnome-shell",
+    "gnome-session",
+    "xorg",
+    "xwayland",
+    "mutter",
+    "kwin_wayland",
+    "kwin_x11",
+    "plasmashell",
+    "ksmserver",
+    "cinnamon",
+    "mate-session",
+    "xfce4-session",
+    "weston",
+    "sway",
+    "xrdp",
+    "vncserver",
+    "xvnc",
+    "x11vnc",
+    "awesun",
+    "sunlogin",
+    "todesk",
+    "rustdesk",
+    "pipewire",
+    "xdg-desktop-portal",
+    "gdm",
+    "sddm",
+    "lightdm",
+)
+
+#: Display-only VRAM use above this fraction is too large to call the device free.
+GPU_DISPLAY_BUSY_FRACTION = 0.10
+
+
+def is_display_process(process: GpuProcess) -> bool:
+    """Whether a process belongs to the desktop/session rather than a job.
+
+    ``nvidia-smi --query-compute-apps`` lists a process with any compute
+    context.  A remote-desktop daemon uses one for encoding (type ``C+G``), but
+    it is not a research workload and should not make the whole device
+    exclusive.
+    """
+
+    if process.process_type in {"G", "G+C"}:
+        return True
+    name = (process.name or "").strip().lower().rsplit("/", 1)[-1]
+    return bool(name) and any(pattern in name for pattern in GPU_DISPLAY_PROCESS_PATTERNS)
 
 
 def gpu_key(gpu: GpuInfo) -> str:
@@ -118,21 +170,84 @@ class ResourceInspector:
                 )
                 continue
             if gpu.processes:
-                pids = [str(p.pid) for p in gpu.processes if p.pid][:5]
-                free_mb = max(0, (gpu.memory_total_mb or 0) - (gpu.memory_used_mb or 0))
+                display = [p for p in gpu.processes if is_display_process(p)]
+                compute = [p for p in gpu.processes if not is_display_process(p)]
+                total = gpu.memory_total_mb or 0
+                used = gpu.memory_used_mb
+                if used is None:
+                    known = [p.used_memory_mb for p in gpu.processes if p.used_memory_mb is not None]
+                    used = sum(known) if known else None
+                free_mb = max(0, total - (used or 0))
+                pids = [str(p.pid) for p in (compute or display) if p.pid][:5]
+                shown = compute or display
+                pid_text = (
+                    f" (pid {', '.join(pids)}{'...' if len(shown) > len(pids) else ''})"
+                    if pids else ""
+                )
+                if not compute:
+                    # Every visible process is a display/session daemon.  Small
+                    # usage is not a compute job; larger usage still needs the
+                    # caller to prove the request fits in the free VRAM.
+                    if total and used is not None and used / total <= GPU_DISPLAY_BUSY_FRACTION:
+                        results.append(
+                            GpuSchedulability(
+                                gpu_index=gpu.index,
+                                status=GpuSchedulabilityStatus.AVAILABLE,
+                                reasons=[
+                                    f"only display/session process(es) active{pid_text}; "
+                                    f"{free_mb} MB VRAM free",
+                                    "advisory: RCF cannot reserve a device it does not control",
+                                ],
+                                evidence={
+                                    "display_only": True,
+                                    "processes": [p.model_dump() for p in gpu.processes],
+                                    "free_mb": free_mb,
+                                    "memory_total_mb": gpu.memory_total_mb,
+                                    "memory_used_mb": gpu.memory_used_mb,
+                                },
+                            )
+                        )
+                    else:
+                        usage = (
+                            f"{used} MB of {total} MB in use"
+                            if total and used is not None
+                            else "VRAM usage is unknown"
+                        )
+                        results.append(
+                            GpuSchedulability(
+                                gpu_index=gpu.index,
+                                status=GpuSchedulabilityStatus.UNKNOWN,
+                                reasons=[
+                                    f"only display/session process(es) active{pid_text} but {usage}; "
+                                    "pass gpu_memory_gb to prove the job fits"
+                                ],
+                                evidence={
+                                    "display_only": True,
+                                    "processes": [p.model_dump() for p in gpu.processes],
+                                    "free_mb": free_mb,
+                                    "memory_total_mb": gpu.memory_total_mb,
+                                    "memory_used_mb": gpu.memory_used_mb,
+                                },
+                            )
+                        )
+                    continue
+                reasons = [
+                    f"{len(compute)} compute process(es) active{pid_text}; "
+                    f"{free_mb} MB VRAM free"
+                ]
+                if display:
+                    reasons.append(f"{len(display)} display/session process(es) also present")
                 results.append(
                     GpuSchedulability(
                         gpu_index=gpu.index,
                         status=GpuSchedulabilityStatus.OCCUPIED,
-                        reasons=[
-                            f"{len(gpu.processes)} compute process(es) active "
-                            f"(pid {', '.join(pids)}{'...' if len(gpu.processes) > len(pids) else ''}); "
-                            f"{free_mb} MB VRAM free"
-                        ],
+                        reasons=reasons,
                         evidence={
+                            "display_only": False,
                             "processes": [p.model_dump() for p in gpu.processes],
                             "free_mb": free_mb,
                             "memory_total_mb": gpu.memory_total_mb,
+                            "memory_used_mb": gpu.memory_used_mb,
                         },
                     )
                 )

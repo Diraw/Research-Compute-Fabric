@@ -13,9 +13,14 @@
   `stale_apply`。
   验证：`tests/unit/test_environment_apply_jobs.py`（含 2 秒伪安装在 16 ms 内返回、
   轮询到 succeeded）、相关 MCP/CLI 表面测试通过；
-  `tests/unit -m "not integration" -n 2` → **1106 passed / 11 skipped**。
-- 未重复真实 MCP 客户端调用，也未重新探测远端节点；`tests/e2e` 中依赖 lab-hpc 的
-  用例仍因 45 秒 probe 超时失败，与本次改动无关。
+  `tests/unit -m "not integration" -n 2` → **1112 passed / 11 skipped**。
+- GPU 调度：SSH 节点上按 `nvidia-smi pmon` 类型与进程名区分桌面/会话进程。桌面独占
+  显存 ≤10% 时判 `available`，>10% 判 `unknown` 并要求 `gpu_memory_gb`；真实计算进程仍
+  `occupied`。验证：新增 `tests/unit/test_gpu_scheduling.py` 与 pmon 解析用例；
+  一次真实 SSH 工作站探测（RTX 4090、392 MB `gnome-remote-desktop`、23 GB 空闲）
+  现在报告 `gpu0: available`。
+- 未重复真实 MCP 客户端调用；`tests/e2e` 中依赖 lab-hpc 的用例仍因 45 秒 probe 超时
+  失败，与本次改动无关。
 
 ## 2026-11-13：search-only 祖先目录推送修复（已合入 main）
 

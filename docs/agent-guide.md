@@ -165,6 +165,10 @@ env = { RCF_HOME = "C:/Users/you/.rcf" }
   看到的状态；探测失败时 RCF 保留旧状态并记录 `error`。`stale: true` 表示该状态已超过
   `[runs].stale_after_seconds`（默认 300 秒）没被确认，此时不要把它当实时状态，更不要据此
   判断「还在跑」或「已经结束」。
+- **GPU 占用区分作业与桌面**：SSH 节点上，`gnome-remote-desktop`、Xorg 等桌面/会话进程
+  即使持有 compute 上下文，也不再按整卡独占处理。桌面占用 ≤10% 显存时 `available`；
+  超过 10% 时 `unknown`，需要 `gpu_memory_gb` 证明放得下；只要存在真实计算进程仍是
+  `occupied`，共享要显式 `allow_shared_gpu=true`。
 
 ### 4.2 存储治理的五条硬规则
 

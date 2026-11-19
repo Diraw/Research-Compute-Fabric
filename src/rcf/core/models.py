@@ -475,6 +475,9 @@ class GpuProcess(RuntimeModel):
     name: str | None = None
     used_memory_mb: int | None = None
     gpu_uuid: str | None = None
+    #: ``nvidia-smi pmon`` context type: ``C``, ``G`` or ``C+G``.  A desktop
+    #: daemon can hold a compute context (for encoding) without being a job.
+    process_type: str | None = None
 
 
 class GpuInfo(RuntimeModel):

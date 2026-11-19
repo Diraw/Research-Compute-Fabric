@@ -35,6 +35,15 @@ behavior, and every entry states the verification boundary.
   disappears. Unauthorised or blocked plans still fail in the call itself.
   Verification boundary: offline service/MCP/CLI tests with a fake installer;
   no live MCP client call was repeated in this round.
+- GPU schedulability on SSH nodes no longer treats every compute context as an
+  exclusive job. `nvidia-smi pmon` context types and a display-process allowlist
+  distinguish GNOME remote desktop, Xorg and similar session daemons from
+  research workloads. Display-only use at or below 10% of VRAM is `available`
+  with an advisory; larger display use is `unknown` and needs `gpu_memory_gb` to
+  prove the request fits; any real compute process still yields `occupied`.
+  Verification boundary: parser and scheduling tests pass, and a live ws-ubuntu
+  probe (RTX 4090, 392 MB gnome-remote-desktop, 23 GB free) now reports gpu0
+  available instead of occupied.
 
 ### Added
 

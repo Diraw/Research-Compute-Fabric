@@ -28,6 +28,15 @@ GPU-bbbb, 4242, python, 20000
 GPU-aaaa, 777, python, 512
 """
 
+PMON = """\
+# gpu         pid   type     sm    mem    enc    dec    jpg    ofa    command
+# Idx           #    C/G      %      %      %      %      %      %    name
+    0      50863     G      -      -      -      -      -      -    Xorg
+    0     623095   C+G      -      -      -      -      -      -    gnome-remote-de
+    0        777   C+G      -      -      -      -      -      -    python
+    1       4242     C      -      -      -      -      -      -    python
+"""
+
 SINFO = """\
 gpu*|up|1/3/0/4|8|64000|gpu:a100:4|1-00:00:00|node[001-004]
 cpu|up|0/2/0/2|16|128000|(null)|2-00:00:00|node[005-006]
@@ -74,6 +83,19 @@ def test_nvidia_smi_parses_gpu_and_processes_by_uuid():
     attached = parsers.attach_processes(gpus, apps)
     assert [p.pid for p in attached[0].processes] == [777]
     assert [p.pid for p in attached[1].processes] == [4242]
+
+
+def test_nvidia_smi_pmon_types_attach_to_processes():
+    gpus = parsers.parse_nvidia_smi_gpus(GPU_CSV)
+    apps = parsers.parse_nvidia_smi_apps(APP_CSV)
+    attached = parsers.attach_processes(gpus, apps)
+    types = parsers.parse_nvidia_smi_process_types(PMON)
+    parsers.attach_process_types(attached, types)
+
+    assert types == {(0, 623095): "C+G", (0, 50863): "G", (0, 777): "C+G", (1, 4242): "C"}
+    by_pid = {p.pid: p for gpu in attached for p in gpu.processes}
+    assert by_pid[777].process_type == "C+G"
+    assert by_pid[4242].process_type == "C"
 
 
 def test_nvidia_smi_tolerates_na_values():
