@@ -261,15 +261,18 @@ def test_measured_pilot_calibrates_matching_large_formal_budget_without_dispatch
 
 def test_small_calibrated_formal_run_really_completes_with_bounded_terminal_wait(tmp_path: Path) -> None:
     with local_service(tmp_path) as svc:
-        workload = request(steps=12, requirements={"cpus": 1, "gpus": 0, "tasks": 1, "time_minutes": 1})
-        pilot = svc.plan_run({**workload, "pilot_seconds": 2})
+        workload = request(steps=50, requirements={"cpus": 1, "gpus": 0, "tasks": 1, "time_minutes": 1})
+        pilot = svc.plan_run({**workload, "pilot_seconds": 5})
         pilot_id = submit(svc, pilot)
         measured = eventually(
             lambda: svc.get_run(pilot_id, refresh=True), lambda view: view["state"] == "succeeded",
         )
         assert measured["exit_code"] == 0
-        evidence = ProgressStore(svc.store).calibration(pilot["calibration_key"])
-        assert evidence is not None and evidence["run_id"] == pilot_id
+        evidence = eventually(
+            lambda: ProgressStore(svc.store).calibration(pilot["calibration_key"]) or {},
+            bool,
+        )
+        assert evidence["run_id"] == pilot_id
 
         formal = svc.plan_run(workload)
         assert formal["calibration_key"] == pilot["calibration_key"]
@@ -283,11 +286,11 @@ def test_small_calibrated_formal_run_really_completes_with_bounded_terminal_wait
         assert waited["progress"]["run_state"] == "succeeded"
         terminal = svc.get_run(run_id, refresh=True)
         assert terminal["exit_code"] == 0 and terminal["state"] == "succeeded"
-        assert terminal["progress"]["completed"] == terminal["progress"]["total"] == 12
+        assert terminal["progress"]["completed"] == terminal["progress"]["total"] == 50
         assert terminal["progress"]["eta_seconds"] is None
         assert not (Path(terminal["handle"]["workdir"]) / "pilot.json").exists()
         result = Path(terminal["result_dir"]) / "result.json"
-        assert json.loads(result.read_text(encoding="utf-8")) == {"steps": 12}
+        assert json.loads(result.read_text(encoding="utf-8")) == {"steps": 50}
         assert "all steps completed" in svc.get_logs(run_id)["log"]
 
 
