@@ -6,8 +6,22 @@ behavior, and every entry states the verification boundary.
 
 ## [Unreleased]
 
+### Changed
+
+- Scope `rcf report` to a standalone HTML file for saved RCF-managed local,
+  SSH and Slurm runs. Project and time filters, failure categories and trends,
+  and per-project statistics use the managed run records. `rcf mcp tools` and
+  the MCP server list the 33 managed tools documented in `docs/agent-guide.md`.
+
 ### Fixed
 
+- Linux environment planning and pre-apply inspection can now check managed
+  prefixes under search-only directories (such as a shared home root with mode
+  0711) without requiring directory-list permission. The guard uses `O_PATH`
+  where available, still requires search permission, and keeps no-follow,
+  inode and ownership checks. Other platforms retain their existing behavior.
+  Verified by non-root Linux and Windows regression tests. A read-only Slurm
+  environment plan returned `create` with no blockers.
 - Linux project push now pins directory handles with `O_PATH` where supported,
   retaining `O_DIRECTORY`, `O_NOFOLLOW` and explicit directory verification.
   Search-only ancestors (such as shared home roots with mode 0711) no longer

@@ -45,6 +45,9 @@ Agent 工作循环见 [Agent 接入指南](agent-guide.md)；验证范围见 [�
 依赖方向严格向下。`core/` 不 import `executors/`，`executors/` 不 import `runs/`，
 `service.py` 是唯一把各层拼起来的地方。
 
+`rcf report` 由 `RcfService.build_report` 汇总 SQLite 中已保存的本机、SSH 和 Slurm 托管运行，
+`report.py` 生成单文件 HTML。报告的状态、失败分类、趋势与项目统计都来自筛选范围内的托管记录。
+
 ## 2. 组件职责
 
 | 模块 | 职责 | 关键约束 |

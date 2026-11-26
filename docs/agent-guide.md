@@ -411,6 +411,15 @@ rcf run submit <plan_id> --yes
 - 不要为了让计划通过而填一个「看起来合理」的试跑时长或预算；先解释缺什么证据。
 - `wait` 超时只是「这段时间内没有变化」，不是任务卡死，更不是失败。
 
+### 4.10 托管运行报告
+
+```bash
+rcf report --project demo --since 7d --limit 100 --out demo-report.html
+```
+
+报告从本地库汇总已保存的本机、SSH 和 Slurm 运行。项目 ID 与创建时间条件先于记录数上限生效。
+过期的非终态标记为 `unverified`。需要重新确认状态时，使用 `rcf run status` 或对应 MCP 工具。
+
 ## 5. 项目该怎么写（让入口可被自动发现）
 
 `projects.toml` 里的 `entrypoint` 是一个**模板**，RCF 会先按空格分词、再逐词替换占位符

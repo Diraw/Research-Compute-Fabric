@@ -39,6 +39,7 @@ RCF 把这些答案放进同一条链路：**plan → review → submit → obse
 | 代码与数据 | `project sync` / `project push`，按内容差异传输并逐文件校验 |
 | 存储治理 | 台账、扫描、两阶段清理；删除必须审阅具体文件清单并再次确认 |
 | 进度与预算 | 项目写入 JSONL 证据；ETA 只来自实测推进，没有证据就返回不可估 |
+| 托管运行报告 | 导出本机、SSH 和 Slurm 的已保存运行，按项目和时间筛选，查看失败与项目统计 |
 | Agent 接入 | 33 个 MCP 工具；CLI 与 MCP 共用 `RcfService` 和同一套错误码 |
 
 ## 安装
@@ -87,6 +88,17 @@ Verified result: .../outputs/result.json
 ```
 
 这证明本机链路可用，不代表远程集群、GPU、MPI 或你的项目环境已经验证。
+
+## 导出托管运行报告
+
+```bash
+uv run rcf report --out report.html
+uv run rcf report --project demo --since 7d --limit 100 --out demo-report.html
+```
+
+在浏览器打开生成的单文件 HTML。报告读取 RCF 本地数据库中已保存的本机、SSH 和 Slurm 运行，
+包含失败分类、按日或周汇总的失败趋势、项目成功率和耗时。
+`--project` 按项目 ID 精确匹配，`--since` 按运行创建时间筛选，两个条件先于 `--limit` 生效。
 
 ## 配置与第一次真实运行
 
@@ -175,6 +187,7 @@ RCF **不是沙箱**。任务以当前账户权限运行；危险命令检测、
 | --- | --- |
 | [文档索引](docs/README.md) | 按角色选择阅读路径 |
 | [Agent 接入指南](docs/agent-guide.md) | CLI/MCP、配置、进度与存储工作流 |
+| [托管运行报告](#导出托管运行报告) | 生成静态 HTML，查看托管运行及失败与项目统计 |
 | [架构](docs/architecture.md) | 组件、模型、状态机与关键流程 |
 | [安全边界](docs/security.md) | 已实现约束与明确不保证的内容 |
 | [验收状态](docs/status.md) | 公开版本的验证口径与待验收项 |

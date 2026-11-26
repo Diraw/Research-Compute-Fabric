@@ -68,6 +68,8 @@ def inspect(request):
                        or os.stat not in os.supports_dir_fd or os.open not in os.supports_dir_fd
                        or os.stat not in os.supports_follow_symlinks):
             raise ValueError('safe ancestor inspection is unsupported on this platform')
+        # Linux can pin a directory without requiring permission to list it.
+        path_only = getattr(os, 'O_PATH', 0) if use_fd and sys.platform.startswith('linux') else 0
         parent_fd = None
         for part in [None] + parts:
             if part is not None:
@@ -95,7 +97,7 @@ def inspect(request):
             if not stat.S_ISDIR(info.st_mode):
                 raise ValueError('prefix component is not a directory: ' + current)
             if use_fd:
-                flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+                flags = (path_only or os.O_RDONLY) | os.O_DIRECTORY | os.O_NOFOLLOW
                 fd = os.open(current, flags) if parent_fd is None else os.open(part, flags, dir_fd=parent_fd)
                 descriptors.append(fd)
                 pinned = os.fstat(fd)
@@ -104,6 +106,10 @@ def inspect(request):
                 parent_fd = fd
             out['checked'].append(dict(path=current, device=info.st_dev, inode=info.st_ino))
         else:
+            # Each child lookup checks search permission on its parent. Do the
+            # same for an existing leaf: O_PATH alone does not check it.
+            if path_only:
+                os.stat('.', dir_fd=parent_fd, follow_symlinks=False)
             out['exists'] = True
         # Windows has no dir_fd traversal. Recheck all observed ancestors without
         # following reparse points; still not a lock against external writers.

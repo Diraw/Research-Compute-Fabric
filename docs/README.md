@@ -38,6 +38,7 @@
 | 文档 | 回答什么问题 | 主要读者 |
 | --- | --- | --- |
 | [agent-guide.md](agent-guide.md) | 怎么把节点接进来、怎么让 Agent 安全地计划/提交/取结果 | 使用者、Agent 集成者 |
+| [托管运行报告](../README.md#导出托管运行报告) | 导出静态 HTML，查看运行历史、失败与项目统计 | 使用者 |
 | [architecture.md](architecture.md) | 代码怎么分层、状态机与关键流程是什么、扩展点在哪 | 贡献者 |
 | [security.md](security.md) | 哪些约束已经强制、哪些明确不保证、上线前检查什么 | 使用者、运维 |
 | [status.md](status.md) | 当前版本验证了什么、哪些还没验证 | 所有人 |

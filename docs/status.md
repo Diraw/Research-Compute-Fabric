@@ -1,5 +1,58 @@
 # 功能完成度与验收状态
 
+## 2026-11-26 托管运行报告与工作树整理
+
+### 静态报告
+
+- Windows / Python 3.11.14：在隔离 RCF home 写入 7 条合成的本机、SSH 和 Slurm 托管运行。
+  用 `rcf report --out report.html` 及带 `--project managed-fixture`、`--since 2d`、`--limit 2` 的组合
+  生成并检查 5 份静态 HTML。项目与创建时间筛选先于条数上限生效。
+- 组合筛选汇总 5 条运行，其中 1 成功、2 失败、1 取消、1 活跃。核对了两类失败及其日期分桶、
+  项目成功率 33%、成功运行耗时、过期观测标记和诊断摘要。设置旧快照环境变量时，页面仍按托管记录汇总。
+
+### CLI 与 MCP 契约
+
+- Windows / Python 3.11.14：以 `324f888384c02e1366e43aa52ee64ac916acdcb4` 为基线。分别在设置与清除
+  旧快照环境变量时，对比 `rcf --help`、`rcf report --help`、`rcf mcp tools --help`、
+  `rcf --json mcp tools` 和 `rcf --json node list`，输出一致。已移出的命令和报告选项均被 CLI 拒绝。
+- 用 `rcf mcp serve` 启动隔离 stdio 子进程，完成握手、列工具和调用 `compute_list_nodes`。
+  两种环境下的 33 个工具名、描述、schema、注解及节点查询响应均与基线一致。
+
+### Windows 离线回归
+
+- Python 3.11.14：`python -B -X utf8 -m pytest -m "not integration" -n 2 --ignore=tests/integration --ignore=tests/e2e/test_pilot_workflow.py --ignore=tests/unit/test_runner.py -p no:cacheprovider -ra`
+  → **1158 passed / 20 skipped**。4 个 junction 夹具在强制 UTF-8 时产生控制台输出解码警告。
+  用系统默认编码运行 `python -B -m pytest tests/unit/test_storage_execution_lock.py -k junction_directory_components_are_rejected -m "not integration" -p no:cacheprovider -ra`
+  → **4 passed / 20 deselected**。
+- 串行运行 `python -B -X utf8 -m pytest tests/e2e/test_pilot_workflow.py tests/unit/test_runner.py -m "not integration" -p no:cacheprovider -ra`
+  → **22 passed**。
+
+### Linux 环境路径
+
+- 本机 WSL Ubuntu 24.04.4 / Python 3.12.3 / 非 root：在 Linux 临时目录运行
+  `PYTHONPATH=src python -B -m pytest tests/unit/test_environment_path_guard.py -m "not integration" -p no:cacheprovider -ra`
+  → **31 passed / 14 skipped**。执行了 6 个真实目录权限用例，跳过项均为 Windows 专属夹具。
+
+### Git 与静态检查
+
+- `git diff --check`、`git diff --cached --check` 和
+  `ruff check --no-cache --no-respect-gitignore src tests tools examples` 均通过。
+- 本轮验收使用隔离目录、本机测试子进程和模拟执行器。两份原型的补丁和原验收记录随本机备份保存。
+
+## 2026-11-24：环境前缀兼容仅可穿行的 Linux 目录（工作树）
+
+- Linux 环境路径守卫在有 `O_PATH` 时用它固定目录句柄，不再要求列目录权限。
+  逐层检查仍不跟随链接并比对设备号与 inode；已有末级目录也必须可穿行。
+  环境所有权检查、落地前复查、Windows 和无 `O_PATH` 平台的行为不变。
+- WSL Ubuntu 24.04 / Python 3.12.3 / 非 root：`python -m pytest tests/unit/test_environment_path_guard.py`
+  → **31 passed / 14 skipped**。旧实现的 3 个仅可穿行用例均复现 `EACCES`；修复后通过，
+  无穿行权限、符号链接和目录身份变化仍被拒绝（符号链接和身份变化含模拟用例）。
+- Windows / Python 3.11.14：`python -m pytest tests/unit -m "not integration" -n 2`
+  → **1130 passed / 17 skipped**；`python -m ruff check src tests tools` 通过。
+- 在一台 Slurm 节点用工作树 CLI 只读执行 `rcf env plan <env-id> --node <node-id>`，
+  结果 `action=create`、`blockers=[]`，列出创建 venv、安装固定版本依赖和验证三步。
+  未执行 `env apply`、提交作业或更新已安装的 CLI/MCP。
+
 ## 2026-11-20：push 临时归档自清理 + 家目录只读审计（工作树）
 
 - `project push` 的远端 staging 归档不再依赖成功路径删除：上传或提取失败时
@@ -140,7 +193,7 @@
 | 运行交付件（`rcf run manifest`） | `runs/manifest.py`、`service.run_manifest`、`test_manifest_and_diff.py` | 2026-11-08 新增：单 JSON，含 run/command/params/code/environment/inputs/outputs；输出清单实时读取，读不到写 `listed: false` + `error`，不写成空列表；默认算 sha256。2026-11-08 真机：lab-hpc run 产出 `result.txt` 32 字节 + sha256 |
 | 运行对比（`rcf run diff`） | `runs/diff.py`、`service.diff_runs`、`test_manifest_and_diff.py` | 2026-11-08 新增：参数逐键（changed / only left / only right / same）、provenance、outcome、command 按 argv 比较；`--artifacts` 才比产物且两侧都算 hash——同尺寸不同内容必须报 changed。真机：两条 `hello` run 的 `result.txt` 同为 32 字节但 sha256 不同，正确判为 changed |
 | 参数扫描（`rcf run sweep`） | `runs/sweep.py`、`service.plan_sweep`、`test_sweep.py` | 2026-11-08 新增：`--grid name=v1,v2` 笛卡尔展开，`--param` 固定值；整张网格先全部 plan，任一点有 fail 检查则整体拒绝，不下单。run 记 `sweep_id`，`run list --sweep` 取回同一批；`--yes` 才提交。2026-11-08 真机：sweep `sweep_20261108T043757Z_ab5647` 的 2 个组合（seed 11/12）均 succeeded、exit 0 |
-| 只读报告（`rcf report`） | `report.py`、`service.build_report`、`test_report.py` | 2026-11-08 新增：单文件 HTML，无服务、无 JS、无外链；内容全部来自本地库，生成时刻写在页头。未重新观测的状态显示为 `unverified <age>`，未分类失败显示 `unknown`，不空白、不绿灯。`--project` / `--since` 先过滤再取 `--limit` |
+| 只读报告（`rcf report`） | `report.py`、`service.build_report`、`test_report.py` | 2026-11-08 新增：单文件 HTML 汇总本地库中已保存的本机、SSH 和 Slurm 托管运行，生成时刻写在页头。未重新观测的状态显示为 `unverified <age>`，未分类失败显示 `unknown`，不空白、不绿灯。`--project` / `--since` 先过滤再取 `--limit` |
 | 产物契约语义 | `runs/manager.py`、`test_planner_and_manager.py` | `command_override` 的 run 不再误报 `contract_violation`，改记 `output_contract_unchecked`；`output_contract=none` 记 `output_contract_unmanaged`；真正的空产物仍标记违规 |
 | 复现元数据传递 | `runs/manager.py`、`test_conventions.py`、`test_planner_and_manager.py` | plan 的 git/inputs 完整写入 run；新增 inputs 摘要传递契约测试；未声明 inputs 或非 git 项目保持 warn，不伪造字段 |
 | plan 期资源校验 | `resources/inspector.py`、`runs/planner.py`、`test_parsers.py`、`test_planner_and_manager.py` | 2026-11-06 修正：Slurm 的 `cpu_capacity` / `memory_capacity` 改用目标分区每节点 `%c` / `%m`，不再拿登录节点冒充计算节点（此前 64 核请求被判 fail、300 GB 请求被判 ok）；分区信息缺失时降为 warn 并在 detail 写明 `login node`。新增 `partition_time_limit` 比对 `MaxTime`，`infinite` / `PARTITION_LIMIT` 不当作上限 |

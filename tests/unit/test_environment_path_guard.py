@@ -90,6 +90,47 @@ def test_existing_and_missing_prefixes_are_read_only_snapshots(tmp_path: Path) -
     assert (existing / "keep.txt").read_text(encoding="utf-8") == "untouched"
 
 
+requires_linux_path_handle = pytest.mark.skipif(
+    sys.platform != "linux" or not hasattr(os, "O_PATH") or getattr(os, "geteuid", lambda: 0)() == 0,
+    reason="requires Linux O_PATH and a non-root user for real directory permissions",
+)
+
+
+@requires_linux_path_handle
+@pytest.mark.parametrize("suffix", ["", "existing", "missing"])
+def test_search_only_directory_is_inspectable(tmp_path: Path, suffix: str) -> None:
+    home = tmp_path / "home"
+    (home / "existing").mkdir(parents=True)
+    target = home / suffix
+    # Owner execute-only models the non-owner permission on a shared 0711 home.
+    home.chmod(0o100)
+    try:
+        result = inspect(target)
+        assert result.allowed, result.reason
+        assert result.exists is (suffix != "missing")
+        assert result.checked_paths[-1] == str(home if suffix == "missing" else target)
+        assert result.missing_from == (str(target) if suffix == "missing" else None)
+        assert not (home / "missing").exists()
+    finally:
+        home.chmod(0o700)
+
+
+@requires_linux_path_handle
+@pytest.mark.parametrize("suffix", ["", "existing", "missing"])
+def test_directory_without_search_permission_is_not_inspectable(tmp_path: Path, suffix: str) -> None:
+    home = tmp_path / "home"
+    (home / "existing").mkdir(parents=True)
+    # Opening a handle is not evidence that its directory can be traversed.
+    home.chmod(0o600)
+    try:
+        result = inspect(home / suffix)
+        assert result.blocked
+        assert result.exists is None
+        assert result.missing_from is None
+    finally:
+        home.chmod(0o700)
+
+
 def test_target_itself_must_be_directory(tmp_path: Path) -> None:
     target = tmp_path / "file"
     target.touch()
